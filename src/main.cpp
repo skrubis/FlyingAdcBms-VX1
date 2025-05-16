@@ -312,6 +312,9 @@ extern "C" int main(void)
          SdoCommands::ProcessStandardCommands(sdoFrame);
          sdo.SendSdoReply(sdoFrame);
       }
+      
+      // Small delay for normal processing
+      for (volatile int i = 0; i < 100; i++);
    }
 
    return 0;

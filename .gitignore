@@ -14,4 +14,5 @@ flash.openocd
 stm32_bms
 test/test_bms
 todo.md
-
+*Zone.Identifier
+can-log.csv
