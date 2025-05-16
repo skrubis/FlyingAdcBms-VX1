@@ -13,4 +13,5 @@ flash-swd.sh
 flash.openocd
 stm32_bms
 test/test_bms
+todo.md
 

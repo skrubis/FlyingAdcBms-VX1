@@ -46,7 +46,7 @@
    2. Temporary parameters (id = 0)
    3. Display values
  */
-//Next param id (increase when adding new parameter!): 55
+//Next param id (increase when adding new parameter!): 56
 //Next value Id: 2105
 /*              category     name         unit       min     max     default id */
 #define PARAM_LIST \
@@ -87,6 +87,7 @@
     PARAM_ENTRY(CAT_SENS,    tempbeta,    "",        1,      100000, 3900,   51  ) \
     PARAM_ENTRY(CAT_COMM,    pdobase,     "",        0,      2047,   500,    10  ) \
     PARAM_ENTRY(CAT_COMM,    sdobase,     "",        0,      63,     10,     11  ) \
+    PARAM_ENTRY(CAT_VX1,     vx1mode,     VX1MODE,    0,      1,      1,      55  ) \
     TESTP_ENTRY(CAT_TEST,    enable,      OFFON,     0,      1,      1,      48  ) \
     TESTP_ENTRY(CAT_TEST,    testchan,    "",        -1,     15,     -1,     49  ) \
     TESTP_ENTRY(CAT_TEST,    testbalance, BALMODE,   0,      2,      0,      54  ) \
@@ -205,6 +206,10 @@
 #define CAT_COMM     "Communication"
 #define CAT_BAT      "Battery Characteristics"
 #define CAT_LIM      "Battery Limits"
+#define CAT_VX1      "VX1 Settings"
+
+#define VX1MODE      "0=Off, 1=On"
+
 
 #define PARAM_ID_SUM_START_OFFSET GITHUB_RUN_NUMBER
 

@@ -43,6 +43,7 @@
 #include "bmsalgo.h"
 #include "bmsio.h"
 #include "selftest.h"
+#include "vx1.h"
 
 #define PRINT_JSON 0
 
@@ -208,6 +209,10 @@ void Param::Change(Param::PARAM_NUM paramNum)
    case Param::sohpreset:
       Param::SetFloat(Param::soh, Param::GetFloat(Param::sohpreset));
       break;
+   case Param::vx1mode:
+      // Handle VX1 mode parameter change
+      VX1::HandleParamChange(paramNum);
+      break;
    default:
       BmsAlgo::SetNominalCapacity(Param::GetFloat(Param::nomcap) * Param::GetFloat(Param::soh) / 100.0f);
       SelfTest::SetNumChannels(Param::GetInt(Param::numchan));
@@ -266,8 +271,9 @@ extern "C" int main(void)
 
    Stm32Scheduler s(TIM2); //We never exit main so it's ok to put it on stack
    scheduler = &s;
-   //Initialize CAN1, including interrupts. Clock must be enabled in clock_setup()
-   Stm32Can c(CAN1, CanHardware::Baud500);
+   //Initialize CAN1 with baud rate based on VX1 mode
+   VX1::Initialize();
+   Stm32Can c(CAN1, VX1::GetCanBaudRate());
    CanMap cmi(&c, false);
    CanMap cme(&c);
    canMapInternal = &cmi;
