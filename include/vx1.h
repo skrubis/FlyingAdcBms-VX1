@@ -66,7 +66,63 @@ public:
      * @param paramNum The parameter that changed
      */
     static void HandleParamChange(Param::PARAM_NUM paramNum);
-    
+    /**
+    * @brief Telltale indicators that can be controlled
+    */
+    enum Telltale {
+        TELLTALE_WRENCH = 0,    // Bits 1:0
+        TELLTALE_BATTERY = 1,   // Bits 3:2
+        TELLTALE_TEMPERATURE = 2, // Bits 5:4
+        TELLTALE_RESERVED = 3   // Bits 7:6
+    };
+
+    /**
+    * @brief Telltale states
+    */
+    enum TelltaleState {
+        TELLTALE_OFF = 0,    // 00 = Off
+        TELLTALE_ON = 1,     // 01 = On
+        TELLTALE_FLASH = 2,  // 10 = Flash
+        TELLTALE_UNUSED = 3  // 11 = Not used
+    };
+    /**
+    * @brief Set the state of a specific telltale
+    * 
+    * @param telltale The telltale to set
+    * @param state The state to set (OFF, ON, FLASH)
+    */
+    static void SetTelltaleState(Telltale telltale, TelltaleState state);
+
+    /**
+    * @brief Send a telltale control message to the VX1 display
+    * 
+    * @param wrench Wrench icon state
+    * @param battery Battery icon state
+    * @param temperature Temperature icon state
+    * @param reserved Reserved bits state (default OFF)
+    * @param canHardware Pointer to the CAN hardware interface
+    * @param sourceAddress Source address for the J1939 message (default 0x4C for Charger)
+    * @param masterOnly If true, only the master node can send the message (default false)
+    * @return true if message was sent successfully
+    */
+    static bool SendTelltaleControl(
+        TelltaleState wrench,
+        TelltaleState battery,
+        TelltaleState temperature,
+        TelltaleState reserved = TELLTALE_OFF,
+        CanHardware* canHardware = nullptr,
+        uint8_t sourceAddress = 0x4C,
+        bool masterOnly = false
+    );
+
+    /**
+    * @brief Task to periodically send telltale control messages (call every 10 seconds)
+    * 
+    * This should be added to the scheduler to maintain telltale states
+    * @param canHardware Pointer to the CAN hardware interface
+    * @param masterOnly If true, only the master node can send the message (default false)
+    */
+    static void TelltaleDisplayTask(CanHardware* canHardware, bool masterOnly = false);
     /**
      * @brief Send a message to the VX1 odometer display
      * 
@@ -97,6 +153,12 @@ public:
 private:
     static char odometerMessage[7]; // 6 characters + null terminator
     static bool displayActive;
+    // Current telltale states
+    static TelltaleState wrenchState;
+    static TelltaleState batteryState;
+    static TelltaleState temperatureState;
+    static TelltaleState reservedState;
+    static bool telltaleActive;
 };
 
 #endif // VX1_H

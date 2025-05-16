@@ -93,6 +93,8 @@
     TESTP_ENTRY(CAT_TEST,    testchan,    "",        -1,     15,     -1,     49  ) \
     TESTP_ENTRY(CAT_TEST,    testbalance, BALMODE,   0,      2,      0,      54  ) \
     PARAM_ENTRY(CAT_VX1,     vx1mode,     VX1MODE,    0,      1,      1,      101  ) \
+    PARAM_ENTRY(CAT_VX1,     vx1regenMaxU,     "V",    0,      160,      146,      101  ) \
+    PARAM_ENTRY(CAT_VX1,     vx1regenMaxI,     "A",    0,      160,      146,      101  ) \
     VALUE_ENTRY(version,     VERSTR, 2001 ) \
     VALUE_ENTRY(hwrev,       HWREVS, 2104 ) \
     VALUE_ENTRY(opmode,      OPMODES,2000 ) \

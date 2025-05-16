@@ -27,10 +27,20 @@ extern BmsFsm* bmsFsm;
 char VX1::odometerMessage[7] = "      "; // Initialize with spaces
 bool VX1::displayActive = false;
 
+// Telltale states
+VX1::TelltaleState VX1::wrenchState = VX1::TELLTALE_OFF;
+VX1::TelltaleState VX1::batteryState = VX1::TELLTALE_OFF;
+VX1::TelltaleState VX1::temperatureState = VX1::TELLTALE_OFF;
+VX1::TelltaleState VX1::reservedState = VX1::TELLTALE_OFF;
+bool VX1::telltaleActive = false;
+
 // J1939 PGN for VX1 odometer display
 #define VX1_ODOMETER_PGN 0x00FEED
 #define VX1_OVERRIDE_NORMAL 0x55
 #define VX1_OVERRIDE_FORCE 0xAA
+
+// J1939 PGN for VX1 telltale control
+#define VX1_TELLTALE_PGN 0x00FECA
 
 /**
  * Initialize VX1 module
@@ -183,3 +193,125 @@ void VX1::OdometerDisplayTask(CanHardware* canHardware, bool masterOnly)
         SendOdometerMessage(nullptr, canHardware, 0x80, masterOnly);
     }
 }
+
+/**
+ * Set the state of a specific telltale
+ * 
+ * @param telltale The telltale to set
+ * @param state The state to set (OFF, ON, FLASH)
+ */
+ void VX1::SetTelltaleState(Telltale telltale, TelltaleState state)
+ {
+     // Validate the state (don't allow UNUSED state)
+     if (state == TELLTALE_UNUSED)
+         state = TELLTALE_OFF;
+         
+     // Set the appropriate telltale state
+     switch (telltale)
+     {
+         case TELLTALE_WRENCH:
+             wrenchState = state;
+             break;
+         case TELLTALE_BATTERY:
+             batteryState = state;
+             break;
+         case TELLTALE_TEMPERATURE:
+             temperatureState = state;
+             break;
+         case TELLTALE_RESERVED:
+             reservedState = state;
+             break;
+     }
+     
+     telltaleActive = true;
+ }
+ 
+ /**
+  * Task to periodically send telltale control messages (call every 10 seconds)
+  * 
+  * This should be added to the scheduler to maintain telltale states
+  * @param canHardware Pointer to the CAN hardware interface
+  * @param masterOnly If true, only the master node can send the message (default false)
+  */
+ void VX1::TelltaleDisplayTask(CanHardware* canHardware, bool masterOnly)
+ {
+     // Only proceed if telltale control is active and VX1 mode is enabled
+     // If masterOnly is true, also check if this is the master node
+     if (telltaleActive && IsEnabled() && (!masterOnly || IsMaster()))
+     {
+         // Send the telltale control message with current states
+         SendTelltaleControl(
+             wrenchState,
+             batteryState,
+             temperatureState,
+             reservedState,
+             canHardware,
+             0x4C,  // Default source address for telltale control
+             masterOnly
+         );
+     }
+ }
+ 
+ /**
+  * Send a telltale control message to the VX1 display
+  * 
+  * @param wrench Wrench icon state
+  * @param battery Battery icon state
+  * @param temperature Temperature icon state
+  * @param reserved Reserved bits state (default OFF)
+  * @param canHardware Pointer to the CAN hardware interface
+  * @param sourceAddress Source address for the J1939 message (default 0x4C for Charger)
+  * @param masterOnly If true, only the master node can send the message (default false)
+  * @return true if message was sent successfully
+  */
+ bool VX1::SendTelltaleControl(
+     TelltaleState wrench,
+     TelltaleState battery,
+     TelltaleState temperature,
+     TelltaleState reserved,
+     CanHardware* canHardware,
+     uint8_t sourceAddress,
+     bool masterOnly)
+ {
+     // Check if VX1 mode is enabled and we have a valid CAN interface
+     if (!IsEnabled() || !canHardware)
+         return false;
+         
+     // If masterOnly is true, check if this is the master node
+     if (masterOnly && !IsMaster())
+         return false;
+     
+     // Prepare the J1939 message
+     uint32_t data[2] = {0, 0};
+     uint8_t* bytes = (uint8_t*)data;
+     
+     // Byte 0: Construct the telltale control byte
+     // Format: Reserved (bits 7-6) | Temperature (bits 5-4) | Battery (bits 3-2) | Wrench (bits 1-0)
+     uint8_t telltaleControl = 0;
+     telltaleControl |= (reserved & 0x03) << 6;     // Reserved bits 7-6
+     telltaleControl |= (temperature & 0x03) << 4;  // Temperature bits 5-4
+     telltaleControl |= (battery & 0x03) << 2;      // Battery bits 3-2
+     telltaleControl |= (wrench & 0x03) << 0;       // Wrench bits 1-0
+     
+     // Set the telltale control byte
+     bytes[0] = telltaleControl;
+     
+     // Other bytes are unused (set to 0)
+     bytes[1] = 0;
+     bytes[2] = 0;
+     bytes[3] = 0;
+     bytes[4] = 0;
+     bytes[5] = 0;
+     bytes[6] = 0;
+     bytes[7] = 0;
+     
+     // Calculate the J1939 29-bit ID
+     // Format: Priority (3 bits) | PGN (18 bits) | Source Address (8 bits)
+     // Priority 3 (0b011) << 26 | PGN 0x00FECA << 8 | Source Address
+     uint32_t j1939Id = (3 << 26) | (VX1_TELLTALE_PGN << 8) | sourceAddress;
+     
+     // Send the message
+     canHardware->Send(j1939Id, data, 8);
+     
+     return true;
+ }
