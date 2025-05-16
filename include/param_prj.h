@@ -46,7 +46,7 @@
    2. Temporary parameters (id = 0)
    3. Display values
  */
-//Next param id (increase when adding new parameter!): 56
+//Next param id (increase when adding new parameter!): 58 (101 if after VX1)
 //Next value Id: 2105
 /*              category     name         unit       min     max     default id */
 #define PARAM_LIST \
@@ -54,14 +54,16 @@
     PARAM_ENTRY(CAT_BMS,     correction0, "ppm",     -10000, 10000,  -1250,  14  ) \
     PARAM_ENTRY(CAT_BMS,     correction1, "ppm",     -10000, 10000,  1500,   15  ) \
     PARAM_ENTRY(CAT_BMS,     correction15,"ppm",     -10000, 10000,  1000,   16  ) \
-    PARAM_ENTRY(CAT_BMS,     numchan,     "",        1,      16,     16,     4   ) \
+    PARAM_ENTRY(CAT_BMS,     numchan,     "",        1,      16,     12,     4   ) \
     PARAM_ENTRY(CAT_BMS,     balmode,     BALMODE,   0,      3,      0,      5   ) \
     PARAM_ENTRY(CAT_BMS,     ubalance,    "mV",      0,      4500,   4500,   30  ) \
     PARAM_ENTRY(CAT_BMS,     idlewait,    "s",       0,      100000, 60,     12  ) \
+    PARAM_ENTRY(CAT_BMS,     sleeptimeout,"h",        0,      99,     2,      56  ) \
+    PARAM_ENTRY(CAT_BMS,     idlecurrent, "mA",       0,      9999,   800,    57  ) \
     PARAM_ENTRY(CAT_BAT,     dischargemax,"A",       1,      2047,   200,    32  ) \
     PARAM_ENTRY(CAT_BAT,     nomcap,      "Ah",      0,      1000,   100,    9   ) \
-    PARAM_ENTRY(CAT_BAT,     icc1,        "A",       1,      2000,   50,     43  ) \
-    PARAM_ENTRY(CAT_BAT,     icc2,        "A",       1,      2000,   30,     44  ) \
+    PARAM_ENTRY(CAT_BAT,     icc1,        "A",       1,      2000,   70,     43  ) \
+    PARAM_ENTRY(CAT_BAT,     icc2,        "A",       1,      2000,   50,     44  ) \
     PARAM_ENTRY(CAT_BAT,     icc3,        "A",       1,      2000,   20,     45  ) \
     PARAM_ENTRY(CAT_BAT,     ucv1,        "mV",      3000,   4500,   3900,   46  ) \
     PARAM_ENTRY(CAT_BAT,     ucv2,        "mV",      3000,   4500,   4000,   47  ) \
@@ -87,10 +89,10 @@
     PARAM_ENTRY(CAT_SENS,    tempbeta,    "",        1,      100000, 3900,   51  ) \
     PARAM_ENTRY(CAT_COMM,    pdobase,     "",        0,      2047,   500,    10  ) \
     PARAM_ENTRY(CAT_COMM,    sdobase,     "",        0,      63,     10,     11  ) \
-    PARAM_ENTRY(CAT_VX1,     vx1mode,     VX1MODE,    0,      1,      1,      55  ) \
     TESTP_ENTRY(CAT_TEST,    enable,      OFFON,     0,      1,      1,      48  ) \
     TESTP_ENTRY(CAT_TEST,    testchan,    "",        -1,     15,     -1,     49  ) \
     TESTP_ENTRY(CAT_TEST,    testbalance, BALMODE,   0,      2,      0,      54  ) \
+    PARAM_ENTRY(CAT_VX1,     vx1mode,     VX1MODE,    0,      1,      1,      101  ) \
     VALUE_ENTRY(version,     VERSTR, 2001 ) \
     VALUE_ENTRY(hwrev,       HWREVS, 2104 ) \
     VALUE_ENTRY(opmode,      OPMODES,2000 ) \

@@ -71,6 +71,8 @@ BmsFsm::bmsstate BmsFsm::Run(bmsstate currentState)
 {
    uint32_t data[2] = { 0 };
    uint32_t sdoReply;
+   float idleCurrentThreshold = 0.0f;
+   uint32_t sleepTimeoutCycles = 0;
 
    switch (currentState)
    {
@@ -172,13 +174,20 @@ BmsFsm::bmsstate BmsFsm::Run(bmsstate currentState)
    case IDLE:
       cycles++;
 
-      if (ABS(Param::GetFloat(Param::idcavg)) > 0.8f)
+      // Check if current is above the idle threshold to return to RUN state
+      // Convert milliamps to amps for comparison
+      idleCurrentThreshold = Param::GetInt(Param::idlecurrent) / 1000.0f;
+      if (ABS(Param::GetFloat(Param::idcavg)) > idleCurrentThreshold)
       {
          return RUN;
       }
 
-      //After 2 hours turn off
-      if (cycles > 72000 && !IsEnabled())
+      // Calculate sleep timeout in cycles (100ms per cycle)
+      // 3600 cycles = 1 hour, multiply by sleeptimeout parameter (in hours)
+      sleepTimeoutCycles = (uint32_t)(Param::GetFloat(Param::sleeptimeout) * 3600 * 10);
+      
+      // Turn off after sleep timeout if not enabled
+      if (cycles > sleepTimeoutCycles && !IsEnabled())
       {
          DigIo::selfena_out.Clear();
          DigIo::nextena_out.Clear();
