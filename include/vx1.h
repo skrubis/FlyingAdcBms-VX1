@@ -22,6 +22,8 @@
 
 #include "params.h"
 #include "canhardware.h"
+#include "bmsfsm.h"
+#include <string.h>
 
 /**
  * @brief VX1 module for handling VX1-specific functionality
@@ -51,11 +53,50 @@ public:
     static CanHardware::baudrates GetCanBaudRate();
     
     /**
+     * @brief Check if this node is the master node
+     * 
+     * @param bmsFsm Pointer to the BmsFsm instance
+     * @return true if this is the master node (first node with ID 10 by default)
+     */
+    static bool IsMaster(BmsFsm* bmsFsm = nullptr);
+    
+    /**
      * @brief Handle parameter changes related to VX1
      * 
      * @param paramNum The parameter that changed
      */
     static void HandleParamChange(Param::PARAM_NUM paramNum);
+    
+    /**
+     * @brief Send a message to the VX1 odometer display
+     * 
+     * @param message The message to display (max 6 characters)
+     * @param canHardware Pointer to the CAN hardware interface
+     * @param sourceAddress Source address for the J1939 message (default 0x80)
+     * @param masterOnly If true, only the master node can send the message (default false)
+     * @return true if message was sent successfully
+     */
+    static bool SendOdometerMessage(const char* message, CanHardware* canHardware, uint8_t sourceAddress = 0x80, bool masterOnly = false);
+    
+    /**
+     * @brief Task to periodically send the odometer message (call every 100ms)
+     * 
+     * This should be added to the scheduler if continuous display is needed
+     * @param canHardware Pointer to the CAN hardware interface
+     * @param masterOnly If true, only the master node can send the message (default false)
+     */
+    static void OdometerDisplayTask(CanHardware* canHardware, bool masterOnly = false);
+    
+    /**
+     * @brief Set the message to be displayed on the odometer
+     * 
+     * @param message The message to display (max 6 characters)
+     */
+    static void SetOdometerMessage(const char* message);
+
+private:
+    static char odometerMessage[7]; // 6 characters + null terminator
+    static bool displayActive;
 };
 
 #endif // VX1_H
