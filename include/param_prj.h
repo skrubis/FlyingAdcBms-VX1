@@ -105,11 +105,11 @@
     PARAM_ENTRY(CAT_VX1_CHR,     VX1chrCellNo, "cells",   30,     42,     36,     130 ) \
     PARAM_ENTRY(CAT_VX1_CHR,     VX1chrCellMaxV,      "mV",      3800,   4200,   4150,   131 ) \
     PARAM_ENTRY(CAT_VX1_CHR,     VX1chrBattCap,    "Ah",      30,   200,   157,   132 ) \
-    PARAM_ENTRY(CAT_VX1_CAN,     VX1enCanMsg,  "0=Off, 1=On",     0,      1,      0,      140 ) \
-    PARAM_ENTRY(CAT_VX1_CAN,     VX1protectTempErr,   "0=Off, 1=On",     0,      1,      0,      141 ) \
+    PARAM_ENTRY(CAT_VX1_CAN,     VX1enCanMsg,  "0=Off, 1=On",     0,      1,      1,      140 ) \
+    PARAM_ENTRY(CAT_VX1_CAN,     VX1protectErr,   "0=Off, 1=On",     0,      1,      0,      141 ) \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1protectTempWarn,   "0=Off, 1=On",     0,      1,      0,      142 ) \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1protectDrive,   "0=Off, 1=On",     0,      1,      0,      143 ) \
-    PARAM_ENTRY(CAT_VX1_CAN,     VX1BootLCDMsg,   "0=Off, 1=On",     0,      1,      0,      144 ) \
+    PARAM_ENTRY(CAT_VX1_CAN,     VX1BootLCDMsg,   "0=Off, 1=On",     0,      1,      1,      144 ) \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1SendMsg, "0=off, 1=dash (LCD/bulb), 3=regVX1drvCurr, 4=VX1regenMaxU 5=VX1regenMaxI, 6=VX1chrCellNo, 7=VX1chrCellMaxV, 8=VX1chrBattCap",   0,      8 ,      0,      145 ) \
     VALUE_ENTRY(version,     VERSTR, 2001 ) \
     VALUE_ENTRY(hwrev,       HWREVS, 2104 ) \

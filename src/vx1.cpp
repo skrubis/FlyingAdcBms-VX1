@@ -158,8 +158,8 @@ void VX1::SetOdometerMessage(const char* message)
  */
 bool VX1::SendOdometerMessage(const char* message, CanHardware* canHardware, uint8_t sourceAddress, bool masterOnly)
 {
-    // Check if VX1 mode is enabled and we have a valid CAN interface
-    if (!IsEnabled() || !canHardware)
+    // Check if VX1 mode is enabled, VX1enCanMsg is set to 1, and we have a valid CAN interface
+    if (!IsEnabled() || !canHardware || Param::GetInt(Param::VX1enCanMsg) != 1)
         return false;
         
     // If masterOnly is true, check if this is the master node
@@ -306,8 +306,8 @@ void VX1::SetClockDisplay(char segment1, char segment2, char segment3, char segm
  */
 bool VX1::SendClockMessage(CanHardware* canHardware, uint8_t sourceAddress, bool masterOnly, bool override)
 {
-    // Check if VX1 mode is enabled and we have a valid CAN interface
-    if (!IsEnabled() || !canHardware)
+    // Check if VX1 mode is enabled, VX1enCanMsg is set to 1, and we have a valid CAN interface
+    if (!IsEnabled() || !canHardware || Param::GetInt(Param::VX1enCanMsg) != 1)
         return false;
         
     // If masterOnly is true, check if this is the master node
@@ -362,8 +362,8 @@ void VX1::ClockDisplayTask(CanHardware* canHardware, bool masterOnly)
  */
 static void BootDisplayTask()
 {
-    // Only proceed if we're in an active boot display state
-    if (bootDisplayState == BOOT_DISPLAY_IDLE || bootDisplayState == BOOT_DISPLAY_DONE || !bootDisplayCanHardware)
+    // Only proceed if we're in an active boot display state and VX1enCanMsg is set to 1
+    if (bootDisplayState == BOOT_DISPLAY_IDLE || bootDisplayState == BOOT_DISPLAY_DONE || !bootDisplayCanHardware || Param::GetInt(Param::VX1enCanMsg) != 1)
         return;
     
     // Get current time (ms since boot)
@@ -589,8 +589,8 @@ static void BootDisplayTask()
  */
 void VX1::DisplayBootWelcomeScreen(CanHardware* canHardware, Stm32Scheduler* scheduler)
 {
-    // Only proceed if VX1 mode is enabled, VX1BootLCDMsg is set to 1, and this is the master node
-    if (!IsEnabled() || Param::GetInt(Param::VX1BootLCDMsg) != 1 || !IsMaster() || !canHardware || !scheduler)
+    // Only proceed if VX1 mode is enabled, VX1BootLCDMsg is set to 1, VX1enCanMsg is set to 1, and this is the master node
+    if (!IsEnabled() || Param::GetInt(Param::VX1BootLCDMsg) != 1 || Param::GetInt(Param::VX1enCanMsg) != 1 || !IsMaster() || !canHardware || !scheduler)
         return;
     
     // Initialize boot display variables
@@ -624,8 +624,8 @@ void VX1::DisplayBootWelcomeScreen(CanHardware* canHardware, Stm32Scheduler* sch
      uint8_t sourceAddress,
      bool masterOnly)
  {
-     // Check if VX1 mode is enabled and we have a valid CAN interface
-     if (!IsEnabled() || !canHardware)
+     // Check if VX1 mode is enabled, VX1enCanMsg is set to 1, and we have a valid CAN interface
+     if (!IsEnabled() || !canHardware || Param::GetInt(Param::VX1enCanMsg) != 1)
          return false;
          
      // If masterOnly is true, check if this is the master node
