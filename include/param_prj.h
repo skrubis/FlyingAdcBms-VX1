@@ -46,7 +46,7 @@
    2. Temporary parameters (id = 0)
    3. Display values
  */
-//Next param id (increase when adding new parameter!): 58 (101 if after VX1)
+//Next param id (increase when adding new parameter!): 145  
 //Next value Id: 2105
 /*              category     name         unit       min     max     default id */
 #define PARAM_LIST \
@@ -93,8 +93,24 @@
     TESTP_ENTRY(CAT_TEST,    testchan,    "",        -1,     15,     -1,     49  ) \
     TESTP_ENTRY(CAT_TEST,    testbalance, BALMODE,   0,      2,      0,      54  ) \
     PARAM_ENTRY(CAT_VX1,     vx1mode,     VX1MODE,    0,      1,      1,      101  ) \
-    PARAM_ENTRY(CAT_VX1,     vx1regenMaxU,     "V",    0,      160,      146,      101  ) \
-    PARAM_ENTRY(CAT_VX1,     vx1regenMaxI,     "A",    0,      160,      146,      101  ) \
+    PARAM_ENTRY(CAT_VX1_MC,  VX1drvCurr,   "A",       30,     230,    180,    110 ) \
+    PARAM_ENTRY(CAT_VX1_MC,  VX1regenCurr, "A",       0,      100,    100,    111 ) \
+    PARAM_ENTRY(CAT_VX1_MC,  VX1rpmLim,    "RPM",     5000,   6050,   6050,   112 ) \
+    PARAM_ENTRY(CAT_VX1_MC,  VX1regenMaxU, "V",       0,      160,    146,    120 ) \
+    PARAM_ENTRY(CAT_VX1_MC,  VX1regenMaxI, "A",       0,      160,    100,    121 ) \
+    PARAM_ENTRY(CAT_VX1_MC,  VX1fullBatRegenPoint, "mV",       0,      4200,    4050,    123 ) \
+    PARAM_ENTRY(CAT_VX1_MC,  VX1fullBatRegenCurr, "A",       0,      30,    30,    122 ) \
+    PARAM_ENTRY(CAT_VX1_MC,  VX1fullNormRegenPoint, "mV",       0,      4015,    3900,    124 ) \
+    PARAM_ENTRY(CAT_VX1_MC,  VX1fullNormRegenCurr, "A",       0,      100,   100,    125 ) \
+    PARAM_ENTRY(CAT_VX1_CHR,     VX1chrCellNo, "cells",   30,     42,     36,     130 ) \
+    PARAM_ENTRY(CAT_VX1_CHR,     VX1chrCellMaxV,      "mV",      3800,   4200,   4150,   131 ) \
+    PARAM_ENTRY(CAT_VX1_CHR,     VX1chrBattCap,    "Ah",      30,   200,   157,   132 ) \
+    PARAM_ENTRY(CAT_VX1_CAN,     VX1enCanMsg,  "0=Off, 1=On",     0,      1,      0,      140 ) \
+    PARAM_ENTRY(CAT_VX1_CAN,     VX1protectTempErr,   "0=Off, 1=On",     0,      1,      0,      141 ) \
+    PARAM_ENTRY(CAT_VX1_CAN,     VX1protectTempWarn,   "0=Off, 1=On",     0,      1,      0,      142 ) \
+    PARAM_ENTRY(CAT_VX1_CAN,     VX1protectDrive,   "0=Off, 1=On",     0,      1,      0,      143 ) \
+    PARAM_ENTRY(CAT_VX1_CAN,     VX1BootLCDMsg,   "0=Off, 1=On",     0,      1,      0,      144 ) \
+    PARAM_ENTRY(CAT_VX1_CAN,     VX1SendMsg, "0=off, 1=dash (LCD/bulb), 3=regVX1drvCurr, 4=VX1regenMaxU 5=VX1regenMaxI, 6=VX1chrCellNo, 7=VX1chrCellMaxV, 8=VX1chrBattCap",   0,      8 ,      0,      145 ) \
     VALUE_ENTRY(version,     VERSTR, 2001 ) \
     VALUE_ENTRY(hwrev,       HWREVS, 2104 ) \
     VALUE_ENTRY(opmode,      OPMODES,2000 ) \
@@ -210,7 +226,12 @@
 #define CAT_COMM     "Communication"
 #define CAT_BAT      "Battery Characteristics"
 #define CAT_LIM      "Battery Limits"
-#define CAT_VX1      "VX1 Settings"
+#define CAT_VX1      "VX1 general settings"
+#define CAT_VX1_MC   "VX1 Motor Controller (only on master node)"
+#define CAT_VX1_CHR  "VX1 Charger settings (only on master node)"
+#define CAT_VX1_TEST "VX1 Test settings (only on master node)"
+#define CAT_VX1_CAN  "VX1 CAN settings (most on master node)"
+
 
 #define VX1MODE      "0=Off, 1=On"
 
@@ -252,4 +273,3 @@ enum _balmode
 
 //Generated enum-string for possible errors
 extern const char* errorListString;
-

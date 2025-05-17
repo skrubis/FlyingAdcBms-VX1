@@ -297,6 +297,9 @@ extern "C" int main(void)
    Param::Change(Param::PARAM_LAST); //Call callback once for general parameter propagation
 
    LoadNVRAM();
+   
+   // Display boot welcome screen if enabled
+   VX1::DisplayBootWelcomeScreen(&c, &s);
 
    while(1)
    {

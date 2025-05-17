@@ -20,8 +20,7 @@
 #include "vx1.h"
 // param_prj.h is already included via params.h in vx1.h
 
-// External reference to the BmsFsm instance from main.cpp
-extern BmsFsm* bmsFsm;
+// No external references needed
 
 // Define static class members
 char VX1::odometerMessage[7] = "      "; // Initialize with spaces
@@ -34,6 +33,11 @@ VX1::TelltaleState VX1::temperatureState = VX1::TELLTALE_OFF;
 VX1::TelltaleState VX1::reservedState = VX1::TELLTALE_OFF;
 bool VX1::telltaleActive = false;
 
+// Clock display data
+char VX1::clockSegments[5] = "    "; // Initialize with spaces
+char VX1::clockChargerIndicator = 0x00;
+bool VX1::clockActive = false;
+
 // J1939 PGN for VX1 odometer display
 #define VX1_ODOMETER_PGN 0x00FEED
 #define VX1_OVERRIDE_NORMAL 0x55
@@ -41,6 +45,24 @@ bool VX1::telltaleActive = false;
 
 // J1939 PGN for VX1 telltale control
 #define VX1_TELLTALE_PGN 0x00FECA
+
+// Boot display sequence states
+enum BootDisplayState {
+    BOOT_DISPLAY_IDLE,
+    BOOT_DISPLAY_WAIT,
+    BOOT_DISPLAY_TELLTALE,
+    BOOT_DISPLAY_WELCOME,
+    BOOT_DISPLAY_UDELTA,
+    BOOT_DISPLAY_SOC,
+    BOOT_DISPLAY_SOH,
+    BOOT_DISPLAY_DONE
+};
+
+// Boot display sequence variables
+static BootDisplayState bootDisplayState = BOOT_DISPLAY_IDLE;
+static uint32_t bootDisplayTimer = 0;
+static CanHardware* bootDisplayCanHardware = nullptr;
+static uint32_t bootDisplayStartTime = 0;
 
 /**
  * Initialize VX1 module
@@ -81,13 +103,10 @@ CanHardware::baudrates VX1::GetCanBaudRate()
  */
 bool VX1::IsMaster(BmsFsm* bmsFsmInstance)
 {
-    // Use the provided BmsFsm instance or the global one if not provided
-    BmsFsm* fsm = bmsFsmInstance ? bmsFsmInstance : bmsFsm;
-    
     // If we have a valid BmsFsm instance, use its IsFirst method
-    if (fsm != nullptr)
+    if (bmsFsmInstance != nullptr)
     {
-        return fsm->IsFirst();
+        return bmsFsmInstance->IsFirst();
     }
     
     // Fallback: check if module address is 10 (default master node ID)
@@ -251,19 +270,351 @@ void VX1::OdometerDisplayTask(CanHardware* canHardware, bool masterOnly)
          );
      }
  }
- 
- /**
-  * Send a telltale control message to the VX1 display
-  * 
-  * @param wrench Wrench icon state
-  * @param battery Battery icon state
-  * @param temperature Temperature icon state
-  * @param reserved Reserved bits state (default OFF)
-  * @param canHardware Pointer to the CAN hardware interface
-  * @param sourceAddress Source address for the J1939 message (default 0x4C for Charger)
-  * @param masterOnly If true, only the master node can send the message (default false)
-  * @return true if message was sent successfully
-  */
+
+/**
+ * Set the clock display message
+ * 
+ * @param segment1 Rightmost segment (segment 1)
+ * @param segment2 Second segment from right
+ * @param segment3 Third segment from right
+ * @param segment4 Fourth segment from right
+ * @param chargerIndicator Charger indicator character (default 0x00 = none)
+ */
+void VX1::SetClockDisplay(char segment1, char segment2, char segment3, char segment4, char chargerIndicator)
+{
+    // Set the clock segments
+    clockSegments[0] = segment1;
+    clockSegments[1] = segment2;
+    clockSegments[2] = segment3;
+    clockSegments[3] = segment4;
+    clockSegments[4] = '\0'; // Ensure null termination
+    
+    // Set the charger indicator
+    clockChargerIndicator = chargerIndicator;
+    
+    clockActive = true;
+}
+
+/**
+ * Send a message to the VX1 clock display
+ * 
+ * @param canHardware Pointer to the CAN hardware interface
+ * @param sourceAddress Source address for the J1939 message (default 0xF9 for Diagnostic)
+ * @param masterOnly If true, only the master node can send the message (default false)
+ * @param override Override control (default true = 0xAA to force display)
+ * @return true if message was sent successfully
+ */
+bool VX1::SendClockMessage(CanHardware* canHardware, uint8_t sourceAddress, bool masterOnly, bool override)
+{
+    // Check if VX1 mode is enabled and we have a valid CAN interface
+    if (!IsEnabled() || !canHardware)
+        return false;
+        
+    // If masterOnly is true, check if this is the master node
+    if (masterOnly && !IsMaster())
+        return false;
+    
+    // Prepare the J1939 message
+    uint32_t data[2] = {0, 0};
+    uint8_t* bytes = (uint8_t*)data;
+    
+    // Format: 4 clock segments, 2 empty segments, charger indicator, override
+    bytes[0] = clockSegments[0]; // Segment 1 (rightmost)
+    bytes[1] = clockSegments[1]; // Segment 2
+    bytes[2] = clockSegments[2]; // Segment 3
+    bytes[3] = clockSegments[3]; // Segment 4 (leftmost)
+    bytes[4] = ' ';              // Empty segment 5
+    bytes[5] = ' ';              // Empty segment 6
+    bytes[6] = clockChargerIndicator; // Charger indicator
+    bytes[7] = override ? VX1_OVERRIDE_FORCE : VX1_OVERRIDE_NORMAL; // Override control
+    
+    // Calculate the J1939 29-bit ID
+    // Format: Priority (3 bits) | PGN (18 bits) | Source Address (8 bits)
+    // Priority 3 (0b011) << 26 | PGN 0x00FEED << 8 | Source Address
+    uint32_t j1939Id = (3 << 26) | (VX1_ODOMETER_PGN << 8) | sourceAddress;
+    
+    // Send the message
+    canHardware->Send(j1939Id, data, 8);
+    
+    return true;
+}
+
+/**
+ * Task to periodically send the clock message (call every 100ms)
+ * 
+ * This should be added to the scheduler if continuous display is needed
+ * @param canHardware Pointer to the CAN hardware interface
+ * @param masterOnly If true, only the master node can send the message (default false)
+ */
+void VX1::ClockDisplayTask(CanHardware* canHardware, bool masterOnly)
+{
+    // Only proceed if clock display is active and VX1 mode is enabled
+    // If masterOnly is true, also check if this is the master node
+    if (clockActive && IsEnabled() && (!masterOnly || IsMaster()))
+    {
+        SendClockMessage(canHardware, 0xF9, masterOnly, true);
+    }
+}
+
+/**
+ * Boot display task function - handles the boot display sequence
+ * This function is called every 100ms by the scheduler
+ */
+static void BootDisplayTask()
+{
+    // Only proceed if we're in an active boot display state
+    if (bootDisplayState == BOOT_DISPLAY_IDLE || bootDisplayState == BOOT_DISPLAY_DONE || !bootDisplayCanHardware)
+        return;
+    
+    // Get current time (ms since boot)
+    uint32_t currentTime = bootDisplayTimer++;
+    
+    // State machine for boot display sequence
+    switch (bootDisplayState)
+    {
+        case BOOT_DISPLAY_WAIT:
+            // Wait 5 seconds after boot
+            if (currentTime >= 50) // 5 seconds (50 * 100ms)
+            {
+                // Move to next state
+                bootDisplayState = BOOT_DISPLAY_TELLTALE;
+                bootDisplayTimer = 0;
+                
+                // Turn on battery telltale
+                VX1::SetTelltaleState(VX1::TELLTALE_BATTERY, VX1::TELLTALE_ON);
+                VX1::SendTelltaleControl(
+                    VX1::TELLTALE_OFF,
+                    VX1::TELLTALE_ON,
+                    VX1::TELLTALE_OFF,
+                    VX1::TELLTALE_OFF,
+                    bootDisplayCanHardware,
+                    0x4C,
+                    false
+                );
+            }
+            break;
+            
+        case BOOT_DISPLAY_TELLTALE:
+            // Show welcome message on odometer LCD
+            if (currentTime == 0) // First iteration
+            {
+                // Set and send the welcome message
+                VX1::SetOdometerMessage(" OI BMS");
+                VX1::SendOdometerMessage(nullptr, bootDisplayCanHardware, 0xF9, false);
+            }
+            
+            // Send telltale and welcome message periodically
+            if (currentTime % 10 == 0) // Every 1 second (10 * 100ms)
+            {
+                // Refresh telltale
+                VX1::SendTelltaleControl(
+                    VX1::TELLTALE_OFF,
+                    VX1::TELLTALE_ON,
+                    VX1::TELLTALE_OFF,
+                    VX1::TELLTALE_OFF,
+                    bootDisplayCanHardware,
+                    0x4C,
+                    false
+                );
+            }
+            
+            // Send welcome message every 100ms
+            VX1::SendOdometerMessage(nullptr, bootDisplayCanHardware, 0xF9, false);
+            
+            // After 10 seconds, move to next state
+            if (currentTime >= 100) // 10 seconds (100 * 100ms)
+            {
+                bootDisplayState = BOOT_DISPLAY_UDELTA;
+                bootDisplayTimer = 0;
+            }
+            break;
+            
+        case BOOT_DISPLAY_UDELTA:
+            // Show udelta on odometer LCD
+            if (currentTime == 0) // First iteration
+            {
+                // Get udelta value (integer only)
+                int udelta = (int)Param::Get(Param::udelta);
+                
+                // Format the message: "u XXX"
+                char message[7];
+                sprintf(message, "u %3d  ", udelta);
+                
+                // Set and send the message
+                VX1::SetOdometerMessage(message);
+                VX1::SendOdometerMessage(nullptr, bootDisplayCanHardware, 0xF9, false);
+            }
+            
+            // Send telltale and udelta message periodically
+            if (currentTime % 10 == 0) // Every 1 second (10 * 100ms)
+            {
+                // Refresh telltale
+                VX1::SendTelltaleControl(
+                    VX1::TELLTALE_OFF,
+                    VX1::TELLTALE_ON,
+                    VX1::TELLTALE_OFF,
+                    VX1::TELLTALE_OFF,
+                    bootDisplayCanHardware,
+                    0x4C,
+                    false
+                );
+            }
+            
+            // Send udelta message every 100ms
+            VX1::SendOdometerMessage(nullptr, bootDisplayCanHardware, 0xF9, false);
+            
+            // After 5 seconds, move to next state
+            if (currentTime >= 50) // 5 seconds (50 * 100ms)
+            {
+                bootDisplayState = BOOT_DISPLAY_SOC;
+                bootDisplayTimer = 0;
+            }
+            break;
+            
+        case BOOT_DISPLAY_SOC:
+            // Show SOC on odometer LCD
+            if (currentTime == 0) // First iteration
+            {
+                // Get SOC value (integer only)
+                int soc = (int)Param::Get(Param::soc);
+                
+                // Format the message: "s XX"
+                char message[7];
+                sprintf(message, " s %2d  ", soc);
+                
+                // Set and send the message
+                VX1::SetOdometerMessage(message);
+                VX1::SendOdometerMessage(nullptr, bootDisplayCanHardware, 0xF9, false);
+            }
+            
+            // Send telltale and SOC message periodically
+            if (currentTime % 10 == 0) // Every 1 second (10 * 100ms)
+            {
+                // Refresh telltale
+                VX1::SendTelltaleControl(
+                    VX1::TELLTALE_OFF,
+                    VX1::TELLTALE_ON,
+                    VX1::TELLTALE_OFF,
+                    VX1::TELLTALE_OFF,
+                    bootDisplayCanHardware,
+                    0x4C,
+                    false
+                );
+            }
+            
+            // Send SOC message every 100ms
+            VX1::SendOdometerMessage(nullptr, bootDisplayCanHardware, 0xF9, false);
+            
+            // After 5 seconds, move to next state
+            if (currentTime >= 50) // 5 seconds (50 * 100ms)
+            {
+                bootDisplayState = BOOT_DISPLAY_SOH;
+                bootDisplayTimer = 0;
+            }
+            break;
+            
+        case BOOT_DISPLAY_SOH:
+            // Show SOH on odometer LCD
+            if (currentTime == 0) // First iteration
+            {
+                // Get SOH value (integer only)
+                int soh = (int)Param::Get(Param::soh);
+                
+                // Format the message: "h XX"
+                char message[7];
+                sprintf(message, " h %2d  ", soh);
+                
+                // Set and send the message
+                VX1::SetOdometerMessage(message);
+                VX1::SendOdometerMessage(nullptr, bootDisplayCanHardware, 0xF9, false);
+            }
+            
+            // Send telltale and SOH message periodically
+            if (currentTime % 10 == 0) // Every 1 second (10 * 100ms)
+            {
+                // Refresh telltale
+                VX1::SendTelltaleControl(
+                    VX1::TELLTALE_OFF,
+                    VX1::TELLTALE_ON,
+                    VX1::TELLTALE_OFF,
+                    VX1::TELLTALE_OFF,
+                    bootDisplayCanHardware,
+                    0x4C,
+                    false
+                );
+            }
+            
+            // Send SOH message every 100ms
+            VX1::SendOdometerMessage(nullptr, bootDisplayCanHardware, 0xF9, false);
+            
+            // After 5 seconds, finish the sequence
+            if (currentTime >= 50) // 5 seconds (50 * 100ms)
+            {
+                // Turn off telltales
+                VX1::SetTelltaleState(VX1::TELLTALE_BATTERY, VX1::TELLTALE_OFF);
+                VX1::SendTelltaleControl(
+                    VX1::TELLTALE_OFF,
+                    VX1::TELLTALE_OFF,
+                    VX1::TELLTALE_OFF,
+                    VX1::TELLTALE_OFF,
+                    bootDisplayCanHardware,
+                    0x4C,
+                    false
+                );
+                
+                // Clear the display
+                VX1::SetOdometerMessage("      ");
+                VX1::SendOdometerMessage(nullptr, bootDisplayCanHardware, 0xF9, false);
+                
+                // Mark as done
+                bootDisplayState = BOOT_DISPLAY_DONE;
+            }
+            break;
+            
+        default:
+            // Should not happen
+            bootDisplayState = BOOT_DISPLAY_DONE;
+            break;
+    }
+}
+
+/**
+ * Display a welcome screen on boot showing system information
+ * 
+ * This function should be called after system initialization.
+ * It will only execute if VX1BootLCDMsg parameter is set to 1 and only on the master node.
+ * 
+ * @param canHardware Pointer to the CAN hardware interface
+ * @param scheduler Pointer to the scheduler for timed sequences
+ */
+void VX1::DisplayBootWelcomeScreen(CanHardware* canHardware, Stm32Scheduler* scheduler)
+{
+    // Only proceed if VX1 mode is enabled, VX1BootLCDMsg is set to 1, and this is the master node
+    if (!IsEnabled() || Param::GetInt(Param::VX1BootLCDMsg) != 1 || !IsMaster() || !canHardware || !scheduler)
+        return;
+    
+    // Initialize boot display variables
+    bootDisplayState = BOOT_DISPLAY_WAIT;
+    bootDisplayTimer = 0;
+    bootDisplayCanHardware = canHardware;
+    bootDisplayStartTime = 0;
+    
+    // Add the boot display task to the scheduler (100ms interval)
+    scheduler->AddTask(BootDisplayTask, 100);
+}
+
+/**
+ * Send a telltale control message to the VX1 display
+ * 
+ * @param wrench Wrench icon state
+ * @param battery Battery icon state
+ * @param temperature Temperature icon state
+ * @param reserved Reserved bits state (default OFF)
+ * @param canHardware Pointer to the CAN hardware interface
+ * @param sourceAddress Source address for the J1939 message (default 0x4C for Charger)
+ * @param masterOnly If true, only the master node can send the message (default false)
+ * @return true if message was sent successfully
+ */
  bool VX1::SendTelltaleControl(
      TelltaleState wrench,
      TelltaleState battery,

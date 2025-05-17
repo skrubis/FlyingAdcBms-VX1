@@ -23,6 +23,7 @@
 #include "params.h"
 #include "canhardware.h"
 #include "bmsfsm.h"
+#include "stm32scheduler.h"
 #include <string.h>
 
 /**
@@ -123,6 +124,38 @@ public:
     * @param masterOnly If true, only the master node can send the message (default false)
     */
     static void TelltaleDisplayTask(CanHardware* canHardware, bool masterOnly = false);
+    
+    /**
+     * @brief Set the clock display message
+     * 
+     * @param segment1 Rightmost segment (segment 1)
+     * @param segment2 Second segment from right
+     * @param segment3 Third segment from right
+     * @param segment4 Fourth segment from right
+     * @param chargerIndicator Charger indicator character (default 0x00 = none)
+     */
+    static void SetClockDisplay(char segment1, char segment2, char segment3, char segment4, char chargerIndicator = 0x00);
+    
+    /**
+     * @brief Send a message to the VX1 clock display
+     * 
+     * @param canHardware Pointer to the CAN hardware interface
+     * @param sourceAddress Source address for the J1939 message (default 0xF9 for Diagnostic)
+     * @param masterOnly If true, only the master node can send the message (default false)
+     * @param override Override control (default true = 0xAA to force display)
+     * @return true if message was sent successfully
+     */
+    static bool SendClockMessage(CanHardware* canHardware, uint8_t sourceAddress = 0xF9, bool masterOnly = false, bool override = true);
+    
+    /**
+     * @brief Task to periodically send the clock message (call every 100ms)
+     * 
+     * This should be added to the scheduler if continuous display is needed
+     * @param canHardware Pointer to the CAN hardware interface
+     * @param masterOnly If true, only the master node can send the message (default false)
+     */
+    static void ClockDisplayTask(CanHardware* canHardware, bool masterOnly = false);
+    
     /**
      * @brief Send a message to the VX1 odometer display
      * 
@@ -149,6 +182,17 @@ public:
      * @param message The message to display (max 6 characters)
      */
     static void SetOdometerMessage(const char* message);
+    
+    /**
+     * @brief Display a welcome screen on boot showing system information
+     * 
+     * This function should be called after system initialization.
+     * It will only execute if VX1BootLCDMsg parameter is set to 1 and only on the master node.
+     * 
+     * @param canHardware Pointer to the CAN hardware interface
+     * @param scheduler Pointer to the scheduler for timed sequences
+     */
+    static void DisplayBootWelcomeScreen(CanHardware* canHardware, Stm32Scheduler* scheduler);
 
 private:
     static char odometerMessage[7]; // 6 characters + null terminator
@@ -159,6 +203,11 @@ private:
     static TelltaleState temperatureState;
     static TelltaleState reservedState;
     static bool telltaleActive;
+    
+    // Clock display data
+    static char clockSegments[5]; // 4 segments + null terminator
+    static char clockChargerIndicator;
+    static bool clockActive;
 };
 
 #endif // VX1_H
