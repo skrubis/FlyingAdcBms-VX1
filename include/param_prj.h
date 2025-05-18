@@ -46,7 +46,7 @@
    2. Temporary parameters (id = 0)
    3. Display values
  */
-//Next param id (increase when adding new parameter!): 145  
+//Next param id (increase when adding new parameter!): 151  
 //Next value Id: 2105
 /*              category     name         unit       min     max     default id */
 #define PARAM_LIST \
@@ -92,25 +92,27 @@
     TESTP_ENTRY(CAT_TEST,    enable,      OFFON,     0,      1,      1,      48  ) \
     TESTP_ENTRY(CAT_TEST,    testchan,    "",        -1,     15,     -1,     49  ) \
     TESTP_ENTRY(CAT_TEST,    testbalance, BALMODE,   0,      2,      0,      54  ) \
-    PARAM_ENTRY(CAT_VX1,     vx1mode,     VX1MODE,    0,      1,      1,      101  ) \
+    PARAM_ENTRY(CAT_VX1,     VX1mode,     VX1MODE,    0,      1,      1,      101  ) \
     PARAM_ENTRY(CAT_VX1_MC,  VX1drvCurr,   "A",       30,     230,    180,    110 ) \
     PARAM_ENTRY(CAT_VX1_MC,  VX1regenCurr, "A",       0,      100,    100,    111 ) \
+    PARAM_ENTRY(CAT_VX1_MC,  VX1spdLim, "km/h",       70,      122,   122,    113 ) \
     PARAM_ENTRY(CAT_VX1_MC,  VX1rpmLim,    "RPM",     5000,   6050,   6050,   112 ) \
     PARAM_ENTRY(CAT_VX1_MC,  VX1regenMaxU, "V",       0,      160,    146,    120 ) \
     PARAM_ENTRY(CAT_VX1_MC,  VX1regenMaxI, "A",       0,      160,    100,    121 ) \
-    PARAM_ENTRY(CAT_VX1_MC,  VX1fullBatRegenPoint, "mV",       0,      4200,    4050,    123 ) \
-    PARAM_ENTRY(CAT_VX1_MC,  VX1fullBatRegenCurr, "A",       0,      30,    30,    122 ) \
-    PARAM_ENTRY(CAT_VX1_MC,  VX1fullNormRegenPoint, "mV",       0,      4015,    3900,    124 ) \
-    PARAM_ENTRY(CAT_VX1_MC,  VX1fullNormRegenCurr, "A",       0,      100,   100,    125 ) \
     PARAM_ENTRY(CAT_VX1_CHR,     VX1chrCellNo, "cells",   30,     42,     36,     130 ) \
     PARAM_ENTRY(CAT_VX1_CHR,     VX1chrCellMaxV,      "mV",      3800,   4200,   4150,   131 ) \
     PARAM_ENTRY(CAT_VX1_CHR,     VX1chrBattCap,    "Ah",      30,   200,   157,   132 ) \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1enCanMsg,  "0=Off, 1=On",     0,      1,      1,      140 ) \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1protectErr,   "0=Off, 1=On",     0,      1,      0,      141 ) \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1protectTempWarn,   "0=Off, 1=On",     0,      1,      0,      142 ) \
-    PARAM_ENTRY(CAT_VX1_CAN,     VX1protectDrive,   "0=Off, 1=On",     0,      1,      0,      143 ) \
+    PARAM_ENTRY(CAT_VX1_CAN,     VX1TempWarnPoint,    "°C",     20,      60,      45,      143 ) \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1BootLCDMsg,   "0=Off, 1=On",     0,      1,      1,      144 ) \
-    PARAM_ENTRY(CAT_VX1_CAN,     VX1SendMsg, "0=off, 1=dash (LCD/bulb), 3=regVX1drvCurr, 4=VX1regenMaxU 5=VX1regenMaxI, 6=VX1chrCellNo, 7=VX1chrCellMaxV, 8=VX1chrBattCap",   0,      8 ,      0,      145 ) \
+    PARAM_ENTRY(CAT_VX1_CAN,     VX1enBootstats, "0=Off, 1=On",     0,      1,      1,      145 ) \
+    PARAM_ENTRY(CAT_VX1_CAN,     VX1msgInterval, "ms",     50,      1000,      100,      146 ) \
+    PARAM_ENTRY(CAT_VX1_CAN,     VX1paramMsgCount, "times",     1,      10,     2,      147 ) \
+    PARAM_ENTRY(CAT_VX1_CAN,     VX1LCDClockStats, "0=Off, 1=Always, 2=Idle",     0,      2,      1,      148 ) \
+    PARAM_ENTRY(CAT_VX1_CAN,     VX1LCDClockStatVal, "0=soc, 1=uavg, 2=udelta, 3=tempmax, 4=power, 5=idcavg",     0,      5,      2,      149 ) \
+    PARAM_ENTRY(CAT_VX1_CAN,     VX1SendMsg, "0=off, 1=dash (LCD/bulb), 3=regVX1drvCurr, 4=VX1regenMaxU 5=VX1regenMaxI, 6=VX1chrCellNo, 7=VX1chrCellMaxV, 8=VX1chrBattCap",   0,      8 ,      0,      150 ) \
     VALUE_ENTRY(version,     VERSTR, 2001 ) \
     VALUE_ENTRY(hwrev,       HWREVS, 2104 ) \
     VALUE_ENTRY(opmode,      OPMODES,2000 ) \

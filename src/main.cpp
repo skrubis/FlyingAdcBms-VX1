@@ -139,6 +139,9 @@ static void Ms100Task(void)
    float cpuLoad = scheduler->GetCpuLoad();
    Param::SetFloat(Param::cpuload, cpuLoad / 10);
 
+   // Check and initialize boot display if needed
+   VX1::CheckAndInitBootDisplay(canMapExternal->GetHardware(), scheduler, bmsFsm);
+
    if (Param::GetInt(Param::opmode) != BmsFsm::ERROR)
       DigIo::led_out.Toggle();
    else //blink slower when an error is detected
@@ -209,7 +212,7 @@ void Param::Change(Param::PARAM_NUM paramNum)
    case Param::sohpreset:
       Param::SetFloat(Param::soh, Param::GetFloat(Param::sohpreset));
       break;
-   case Param::vx1mode:
+   case Param::VX1mode:
       // Handle VX1 mode parameter change
       VX1::HandleParamChange(paramNum);
       break;
@@ -298,8 +301,8 @@ extern "C" int main(void)
 
    LoadNVRAM();
    
-   // Display boot welcome screen if enabled
-   VX1::DisplayBootWelcomeScreen(&c, &s);
+   // Boot welcome screen will be displayed from Ms100Task
+   // VX1::DisplayBootWelcomeScreen(&c, &s);
 
    while(1)
    {

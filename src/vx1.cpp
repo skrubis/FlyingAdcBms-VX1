@@ -18,6 +18,7 @@
  */
 
 #include "vx1.h"
+#include <libopencm3/stm32/f1/bkp.h>
 // param_prj.h is already included via params.h in vx1.h
 
 // No external references needed
@@ -50,11 +51,14 @@ bool VX1::clockActive = false;
 enum BootDisplayState {
     BOOT_DISPLAY_IDLE,
     BOOT_DISPLAY_WAIT,
-    BOOT_DISPLAY_TELLTALE,
-    BOOT_DISPLAY_WELCOME,
+    BOOT_DISPLAY_OI_FLY,
+    BOOT_DISPLAY_B_M_S,
+    BOOT_DISPLAY_UTOTAL,    // Only if VX1enBootstats = 1
     BOOT_DISPLAY_UDELTA,
     BOOT_DISPLAY_SOC,
     BOOT_DISPLAY_SOH,
+    BOOT_DISPLAY_TEMPMIN,   // Only if VX1enBootstats = 1
+    BOOT_DISPLAY_TEMPMAX,   // Only if VX1enBootstats = 1
     BOOT_DISPLAY_DONE
 };
 
@@ -82,7 +86,7 @@ void VX1::Initialize()
  */
 bool VX1::IsEnabled()
 {
-    return Param::GetInt(Param::vx1mode) == 1;
+    return Param::GetInt(Param::VX1mode) == 1;
 }
 
 /**
@@ -120,10 +124,91 @@ bool VX1::IsMaster(BmsFsm* bmsFsmInstance)
  */
 void VX1::HandleParamChange(Param::PARAM_NUM paramNum)
 {
-    if (paramNum == Param::vx1mode)
+    if (paramNum == Param::VX1mode)
     {
         // Handle VX1 mode change
         // Note: CAN baud rate changes will only take effect after restart
+    }
+}
+
+/**
+ * Convert an ASCII character to 7-segment display code
+ * 
+ * @param ch Character to convert
+ * @return uint8_t 7-segment code (bits correspond to segments A-G)
+ */
+uint8_t VX1::CharToSegment(char ch) {
+    // 7-segment display mapping
+    switch (ch) {
+        // Digits
+        case '0': return 0x3F; // A B C D E F
+        case '1': return 0x06; // B C
+        case '2': return 0x5B; // A B G E D
+        case '3': return 0x4F; // A B C D G
+        case '4': return 0x66; // F G B C
+        case '5': return 0x6D; // A F G C D
+        case '6': return 0x7D; // A F G E D C
+        case '7': return 0x07; // A B C
+        case '8': return 0x7F; // A B C D E F G
+        case '9': return 0x6F; // A B C D F G
+
+        // Uppercase Letters
+        case 'A': return 0x77; // A B C E F G
+        case 'B': return 0x7C; // C D E F G
+        case 'C': return 0x39; // A D E F
+        case 'D': return 0x5E; // B C D E G
+        case 'E': return 0x79; // A D E F G
+        case 'F': return 0x71; // A E F G
+        case 'G': return 0x3D; // A C D E F
+        case 'H': return 0x76; // B C E F G
+        case 'I': return 0x06; // B C (same as 1)
+        case 'J': return 0x1E; // B C D E
+        case 'L': return 0x38; // D E F
+        case 'M': return 0x37; // A E F C (approximation)
+        case 'N': return 0x54; // C E G
+        case 'O': return 0x3F; // A B C D E F
+        case 'P': return 0x73; // A B E F G
+        case 'Q': return 0x67; // A B C F G
+        case 'R': return 0x50; // E G
+        case 'S': return 0x6D; // A F G C D
+        case 'T': return 0x78; // D E F G
+        case 'U': return 0x3E; // B C D E F
+        case 'V': return 0x3E; // B C D E F (same as U)
+        case 'W': return 0x7E; // B C D E F G (approximation)
+        case 'X': return 0x76; // B C E F G (same as H)
+        case 'Y': return 0x6E; // B C D F G
+        case 'Z': return 0x5B; // A B G E D (same as 2)
+
+        // Lowercase Letters (stylized approximations)
+        case 'a': return 0x5F; // A B C D E G
+        case 'b': return 0x7C; // C D E F G
+        case 'c': return 0x58; // D E G
+        case 'd': return 0x5E; // B C D E G
+        case 'e': return 0x7B; // A B D E F G
+        case 'f': return 0x71; // A E F G (same as F)
+        case 'g': return 0x6F; // A B C D F G (same as 9)
+        case 'h': return 0x74; // C E F G
+        case 'i': return 0x04; // C
+        case 'j': return 0x0E; // B C D
+        case 'l': return 0x30; // E F
+        case 'n': return 0x54; // C E G
+        case 'o': return 0x5C; // C D E G
+        case 'q': return 0x67; // A B C F G (same as Q)
+        case 'r': return 0x50; // E G
+        case 's': return 0x6D; // A F G C D (same as S)
+        case 't': return 0x78; // D E F G
+        case 'u': return 0x1C; // C D E
+        case 'y': return 0x6E; // B C D F G
+
+        // Symbols
+        case '-': return 0x40; // G
+        case '_': return 0x08; // D
+        case '=': return 0x48; // D G
+        case ' ': return 0x00; // Blank
+        case '.': return 0x00; // No DP in hardware — OFF
+
+        // Default for unknown characters
+        default: return 0x00;  // Blank
     }
 }
 
@@ -173,16 +258,18 @@ bool VX1::SendOdometerMessage(const char* message, CanHardware* canHardware, uin
     }
     
     // Prepare the J1939 message
-    uint32_t data[2] = {0, 0};
-    uint8_t* bytes = (uint8_t*)data;
+    uint8_t data[8];
+    uint8_t* bytes = data;
     
-    // Characters are in reverse order (byte 5 is leftmost, byte 0 is rightmost)
-    bytes[0] = odometerMessage[5]; // Right-most character
-    bytes[1] = odometerMessage[4];
-    bytes[2] = odometerMessage[3];
-    bytes[3] = odometerMessage[2];
-    bytes[4] = odometerMessage[1];
-    bytes[5] = odometerMessage[0]; // Left-most character
+        // Convert characters to 7-segment display codes and place in correct order
+    // According to bootmsg-pgn.md, bytes must be in reverse order: 
+    // For "OI FLY": 0x6E 0x38 0x71 0x00 0x06 0x3F 0x00 0xAA
+    bytes[0] = CharToSegment(odometerMessage[5]); // Right-most character
+    bytes[1] = CharToSegment(odometerMessage[4]);
+    bytes[2] = CharToSegment(odometerMessage[3]);
+    bytes[3] = CharToSegment(odometerMessage[2]);
+    bytes[4] = CharToSegment(odometerMessage[1]);
+    bytes[5] = CharToSegment(odometerMessage[0]); // Left-most character
     bytes[6] = 0x00;               // Charger active indicator (off)
     bytes[7] = VX1_OVERRIDE_FORCE; // Override control (force display)
     
@@ -358,71 +445,111 @@ void VX1::ClockDisplayTask(CanHardware* canHardware, bool masterOnly)
 
 /**
  * Boot display task function - handles the boot display sequence
- * This function is called every 100ms by the scheduler
+ * This function is called with the interval set by VX1msgInterval parameter
  */
 static void BootDisplayTask()
 {
-    // Only proceed if we're in an active boot display state and VX1enCanMsg is set to 1
-    if (bootDisplayState == BOOT_DISPLAY_IDLE || bootDisplayState == BOOT_DISPLAY_DONE || !bootDisplayCanHardware || Param::GetInt(Param::VX1enCanMsg) != 1)
+    // Only proceed if we're in an active boot display state, VX1 mode is enabled, and VX1enCanMsg is set to 1
+    if (bootDisplayState == BOOT_DISPLAY_IDLE || bootDisplayState == BOOT_DISPLAY_DONE || 
+        !bootDisplayCanHardware || !VX1::IsEnabled() || Param::GetInt(Param::VX1enCanMsg) != 1)
         return;
     
-    // Get current time (ms since boot)
+    // Get message interval from parameter
+    uint32_t msgInterval = Param::GetInt(Param::VX1msgInterval);
+    
+    // Get current time 
     uint32_t currentTime = bootDisplayTimer++;
+    
+    // Calculate iterations needed for timing based on message interval
+    uint32_t waitIterations = 10000 / msgInterval; // 10 seconds
+    uint32_t shortDisplayIterations = 2000 / msgInterval; // 2 seconds
+    uint32_t longDisplayIterations = 5000 / msgInterval; // 5 seconds
     
     // State machine for boot display sequence
     switch (bootDisplayState)
     {
         case BOOT_DISPLAY_WAIT:
-            // Wait 5 seconds after boot
-            if (currentTime >= 50) // 5 seconds (50 * 100ms)
+            // Wait 10 seconds after boot for scooter electronics to start up
+            if (currentTime >= waitIterations) 
             {
                 // Move to next state
-                bootDisplayState = BOOT_DISPLAY_TELLTALE;
+                bootDisplayState = BOOT_DISPLAY_OI_FLY;
                 bootDisplayTimer = 0;
-                
-                // Turn on battery telltale
-                VX1::SetTelltaleState(VX1::TELLTALE_BATTERY, VX1::TELLTALE_ON);
-                VX1::SendTelltaleControl(
-                    VX1::TELLTALE_OFF,
-                    VX1::TELLTALE_ON,
-                    VX1::TELLTALE_OFF,
-                    VX1::TELLTALE_OFF,
-                    bootDisplayCanHardware,
-                    0x4C,
-                    false
-                );
             }
             break;
             
-        case BOOT_DISPLAY_TELLTALE:
-            // Show welcome message on odometer LCD
+        case BOOT_DISPLAY_OI_FLY:
+            // Show "OI FLY" on odometer LCD
             if (currentTime == 0) // First iteration
             {
-                // Set and send the welcome message
-                VX1::SetOdometerMessage(" OI BMS");
+                // Set and send the message
+                VX1::SetOdometerMessage("OI FLY");
                 VX1::SendOdometerMessage(nullptr, bootDisplayCanHardware, 0xF9, false);
             }
             
-            // Send telltale and welcome message periodically
-            if (currentTime % 10 == 0) // Every 1 second (10 * 100ms)
-            {
-                // Refresh telltale
-                VX1::SendTelltaleControl(
-                    VX1::TELLTALE_OFF,
-                    VX1::TELLTALE_ON,
-                    VX1::TELLTALE_OFF,
-                    VX1::TELLTALE_OFF,
-                    bootDisplayCanHardware,
-                    0x4C,
-                    false
-                );
-            }
-            
-            // Send welcome message every 100ms
+            // Send message every iteration
             VX1::SendOdometerMessage(nullptr, bootDisplayCanHardware, 0xF9, false);
             
-            // After 10 seconds, move to next state
-            if (currentTime >= 100) // 10 seconds (100 * 100ms)
+            // After 2 seconds, move to next state
+            if (currentTime >= shortDisplayIterations)
+            {
+                bootDisplayState = BOOT_DISPLAY_B_M_S;
+                bootDisplayTimer = 0;
+            }
+            break;
+            
+        case BOOT_DISPLAY_B_M_S:
+            // Show " B M S " on odometer LCD
+            if (currentTime == 0) // First iteration
+            {
+                // Set and send the message
+                VX1::SetOdometerMessage(" BMMS ");
+                VX1::SendOdometerMessage(nullptr, bootDisplayCanHardware, 0xF9, false);
+            }
+            
+            // Send message every iteration
+            VX1::SendOdometerMessage(nullptr, bootDisplayCanHardware, 0xF9, false);
+            
+            // After 2 seconds, check if we should show stats
+            if (currentTime >= shortDisplayIterations)
+            {
+                // Check if we should show stats
+                if (Param::GetInt(Param::VX1enBootstats) == 1)
+                {
+                    bootDisplayState = BOOT_DISPLAY_UTOTAL;
+                }
+                else
+                {
+                    bootDisplayState = BOOT_DISPLAY_DONE;
+                }
+                bootDisplayTimer = 0;
+            }
+            break;
+            
+        case BOOT_DISPLAY_UTOTAL:
+            // Show battery pack voltage on odometer LCD
+            if (currentTime == 0) // First iteration
+            {
+                // Get the current battery pack voltage (utotal) - first 5 digits only
+                // Example: if utotal value = 138864.7, we need to show "U13886"
+                s32fp utotalFixed = Param::Get(Param::utotal);
+                float utotalRaw = FP_TOFLOAT(utotalFixed);
+                int utotal = (int)utotalRaw;
+                
+                // Take only first 5 digits for display
+                char message[7];
+                sprintf(message, "U%d", utotal);
+                
+                // Set and send the message
+                VX1::SetOdometerMessage(message);
+                VX1::SendOdometerMessage(nullptr, bootDisplayCanHardware, 0xF9, false);
+            }
+            
+            // Send message every iteration
+            VX1::SendOdometerMessage(nullptr, bootDisplayCanHardware, 0xF9, false);
+            
+            // After 5 seconds, move to next state
+            if (currentTime >= longDisplayIterations)
             {
                 bootDisplayState = BOOT_DISPLAY_UDELTA;
                 bootDisplayTimer = 0;
@@ -433,38 +560,27 @@ static void BootDisplayTask()
             // Show udelta on odometer LCD
             if (currentTime == 0) // First iteration
             {
-                // Get udelta value (integer only)
-                int udelta = (int)Param::Get(Param::udelta);
+                // Get udelta value (full mV int) - left aligned with 5 more chars after 'd'
+                // Example: if udelta value = 21.53125, show "d21   "
+                // Example: if udelta value = 128.35, show "d128  "
+                s32fp udeltaFixed = Param::Get(Param::udelta);
+                float udeltaRaw = FP_TOFLOAT(udeltaFixed);
+                int udelta = (int)udeltaRaw;
                 
-                // Format the message: "u XXX"
+                // Format the message exactly as "dXXX  " (left-aligned) per the specification
                 char message[7];
-                sprintf(message, "u %3d  ", udelta);
+                sprintf(message, "d%-5d", udelta);
                 
                 // Set and send the message
                 VX1::SetOdometerMessage(message);
                 VX1::SendOdometerMessage(nullptr, bootDisplayCanHardware, 0xF9, false);
             }
             
-            // Send telltale and udelta message periodically
-            if (currentTime % 10 == 0) // Every 1 second (10 * 100ms)
-            {
-                // Refresh telltale
-                VX1::SendTelltaleControl(
-                    VX1::TELLTALE_OFF,
-                    VX1::TELLTALE_ON,
-                    VX1::TELLTALE_OFF,
-                    VX1::TELLTALE_OFF,
-                    bootDisplayCanHardware,
-                    0x4C,
-                    false
-                );
-            }
-            
-            // Send udelta message every 100ms
+            // Send message every iteration
             VX1::SendOdometerMessage(nullptr, bootDisplayCanHardware, 0xF9, false);
             
             // After 5 seconds, move to next state
-            if (currentTime >= 50) // 5 seconds (50 * 100ms)
+            if (currentTime >= longDisplayIterations)
             {
                 bootDisplayState = BOOT_DISPLAY_SOC;
                 bootDisplayTimer = 0;
@@ -475,38 +591,37 @@ static void BootDisplayTask()
             // Show SOC on odometer LCD
             if (currentTime == 0) // First iteration
             {
-                // Get SOC value (integer only)
-                int soc = (int)Param::Get(Param::soc);
+                // Get SOC value (state of charge) - only first 3 digits before decimal
+                // Example: if soc value = 72.15625, show "SOC 72"
+                // Example: if soc value = 100.00000, show "SOC100"
                 
-                // Format the message: "s XX"
+                // Try a different approach - hardcode the value for now
+                // We know from the web interface that the actual value should be 72
+                //int soc = 72;
+                
+                // For debugging - log the various ways we've tried to get the SOC value
+                s32fp socFixed = Param::Get(Param::soc);
+                //float socFromFixed = FP_TOFLOAT(socFixed);
+                //float socFromFloat = Param::GetFloat(Param::soc);
+                //float socFromBKP = (float)BKP_DR1 / 100.0f;
+                int socmsg = (int)socFixed;
+                // Format the message exactly as "SOC XX" or "SOCXXX" based on digits per the specification
                 char message[7];
-                sprintf(message, " s %2d  ", soc);
+                if (socmsg < 100)
+                    sprintf(message, "SOC %2d", socmsg);
+                else
+                    sprintf(message, "SOC%3d", socmsg);
                 
                 // Set and send the message
                 VX1::SetOdometerMessage(message);
                 VX1::SendOdometerMessage(nullptr, bootDisplayCanHardware, 0xF9, false);
             }
             
-            // Send telltale and SOC message periodically
-            if (currentTime % 10 == 0) // Every 1 second (10 * 100ms)
-            {
-                // Refresh telltale
-                VX1::SendTelltaleControl(
-                    VX1::TELLTALE_OFF,
-                    VX1::TELLTALE_ON,
-                    VX1::TELLTALE_OFF,
-                    VX1::TELLTALE_OFF,
-                    bootDisplayCanHardware,
-                    0x4C,
-                    false
-                );
-            }
-            
-            // Send SOC message every 100ms
+            // Send message every iteration
             VX1::SendOdometerMessage(nullptr, bootDisplayCanHardware, 0xF9, false);
             
             // After 5 seconds, move to next state
-            if (currentTime >= 50) // 5 seconds (50 * 100ms)
+            if (currentTime >= longDisplayIterations)
             {
                 bootDisplayState = BOOT_DISPLAY_SOH;
                 bootDisplayTimer = 0;
@@ -517,57 +632,113 @@ static void BootDisplayTask()
             // Show SOH on odometer LCD
             if (currentTime == 0) // First iteration
             {
-                // Get SOH value (integer only)
-                int soh = (int)Param::Get(Param::soh);
+                // Get SOH value (state of health) - only first 3 digits before decimal
+                // Example: if soh value = 100.0000, show "SOH100"
+                s32fp sohFixed = Param::Get(Param::soh);
+                float sohRaw = FP_TOFLOAT(sohFixed);
+                int soh = (int)sohRaw;
                 
-                // Format the message: "h XX"
+                // Format the message exactly as "SOH XX" or "SOHXXX" based on digits per the specification
                 char message[7];
-                sprintf(message, " h %2d  ", soh);
+                if (soh < 100)
+                    sprintf(message, "SOH %2d", soh);
+                else
+                    sprintf(message, "SOH%3d", soh);
                 
                 // Set and send the message
                 VX1::SetOdometerMessage(message);
                 VX1::SendOdometerMessage(nullptr, bootDisplayCanHardware, 0xF9, false);
             }
             
-            // Send telltale and SOH message periodically
-            if (currentTime % 10 == 0) // Every 1 second (10 * 100ms)
+            // Send message every iteration
+            VX1::SendOdometerMessage(nullptr, bootDisplayCanHardware, 0xF9, false);
+            
+            // After 5 seconds, check if we should show temperature stats
+            if (currentTime >= longDisplayIterations)
             {
-                // Refresh telltale
-                VX1::SendTelltaleControl(
-                    VX1::TELLTALE_OFF,
-                    VX1::TELLTALE_ON,
-                    VX1::TELLTALE_OFF,
-                    VX1::TELLTALE_OFF,
-                    bootDisplayCanHardware,
-                    0x4C,
-                    false
-                );
+                bootDisplayState = BOOT_DISPLAY_TEMPMIN;
+                bootDisplayTimer = 0;
+            }
+            break;
+            
+        case BOOT_DISPLAY_TEMPMIN:
+            // Show minimum temperature on odometer LCD
+            if (currentTime == 0) // First iteration
+            {
+                // Get tempmin value (integer only) - temperature in degrees C
+                s32fp tempminFixed = Param::Get(Param::tempmin);
+                float tempminRaw = FP_TOFLOAT(tempminFixed);
+                int tempmin = (int)tempminRaw;
+                
+                // Format the message as "Lt XX" or "Lt-XX" based on sign per specification
+                char message[7];
+                if (tempmin >= 0)
+                    sprintf(message, "Lt%-4d", tempmin);
+                else
+                    sprintf(message, "Lt%4d", tempmin);
+                
+                // Set and send the message
+                VX1::SetOdometerMessage(message);
+                VX1::SendOdometerMessage(nullptr, bootDisplayCanHardware, 0xF9, false);
             }
             
-            // Send SOH message every 100ms
+            // Send message every iteration
+            VX1::SendOdometerMessage(nullptr, bootDisplayCanHardware, 0xF9, false);
+            
+            // After 5 seconds, move to next state
+            if (currentTime >= longDisplayIterations)
+            {
+                bootDisplayState = BOOT_DISPLAY_TEMPMAX;
+                bootDisplayTimer = 0;
+            }
+            break;
+            
+        case BOOT_DISPLAY_TEMPMAX:
+            // Show maximum temperature on odometer LCD
+            if (currentTime == 0) // First iteration
+            {
+                // Get tempmax value (integer only) - temperature in degrees C
+                s32fp tempmaxFixed = Param::Get(Param::tempmax);
+                float tempmaxRaw = FP_TOFLOAT(tempmaxFixed);
+                int tempmax = (int)tempmaxRaw;
+                
+                // Format the message as "Ht XX" or "Ht-XX" based on sign per specification
+                char message[7];
+                if (tempmax >= 0)
+                    sprintf(message, "Ht%-4d", tempmax);
+                else
+                    sprintf(message, "Ht%4d", tempmax);
+                
+                // Set and send the message
+                VX1::SetOdometerMessage(message);
+                VX1::SendOdometerMessage(nullptr, bootDisplayCanHardware, 0xF9, false);
+            }
+            
+            // Send message every iteration
             VX1::SendOdometerMessage(nullptr, bootDisplayCanHardware, 0xF9, false);
             
             // After 5 seconds, finish the sequence
-            if (currentTime >= 50) // 5 seconds (50 * 100ms)
+            if (currentTime >= longDisplayIterations)
             {
-                // Turn off telltales
-                VX1::SetTelltaleState(VX1::TELLTALE_BATTERY, VX1::TELLTALE_OFF);
-                VX1::SendTelltaleControl(
-                    VX1::TELLTALE_OFF,
-                    VX1::TELLTALE_OFF,
-                    VX1::TELLTALE_OFF,
-                    VX1::TELLTALE_OFF,
-                    bootDisplayCanHardware,
-                    0x4C,
-                    false
-                );
-                
-                // Clear the display
-                VX1::SetOdometerMessage("      ");
-                VX1::SendOdometerMessage(nullptr, bootDisplayCanHardware, 0xF9, false);
-                
-                // Mark as done
                 bootDisplayState = BOOT_DISPLAY_DONE;
+                bootDisplayTimer = 0;
+            }
+            break;
+            
+        case BOOT_DISPLAY_DONE:
+            // Send 3 empty messages to properly clear the display
+            // Format: 0x18FEEDF9 + 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0xAA
+            if (currentTime < 3) // Send 3 empty messages
+            {
+                // Send empty message with all segment codes as 0x00
+                uint8_t data[8] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, VX1_OVERRIDE_FORCE};
+                uint32_t j1939Id = (3 << 26) | (VX1_ODOMETER_PGN << 8) | 0xF9;
+                bootDisplayCanHardware->Send(j1939Id, (uint32_t*)data, 8);
+            }
+            else
+            {
+                // Mark as done after sending all 3 empty messages
+                bootDisplayState = BOOT_DISPLAY_IDLE;
             }
             break;
             
@@ -579,6 +750,28 @@ static void BootDisplayTask()
 }
 
 /**
+ * Check if boot display should be initialized and do so if needed
+ *
+ * This should be called periodically (e.g., from Ms100Task) to initialize 
+ * the boot display sequence when the BMS is properly running.
+ * 
+ * @param canHardware Pointer to the CAN hardware interface
+ * @param scheduler Pointer to the scheduler for timed sequences
+ * @param bmsFsm Pointer to the BmsFsm instance for master node detection
+ */
+void VX1::CheckAndInitBootDisplay(CanHardware* canHardware, Stm32Scheduler* scheduler, BmsFsm* bmsFsm)
+{
+    static bool bootDisplayInitialized = false;
+    
+    // Initialize boot display screen once, when BMS is running
+    if (!bootDisplayInitialized && bmsFsm != nullptr)
+    {
+        bootDisplayInitialized = true;
+        DisplayBootWelcomeScreen(canHardware, scheduler, bmsFsm);
+    }
+}
+
+/**
  * Display a welcome screen on boot showing system information
  * 
  * This function should be called after system initialization.
@@ -586,11 +779,12 @@ static void BootDisplayTask()
  * 
  * @param canHardware Pointer to the CAN hardware interface
  * @param scheduler Pointer to the scheduler for timed sequences
+ * @param bmsFsm Pointer to the BmsFsm instance for master node detection
  */
-void VX1::DisplayBootWelcomeScreen(CanHardware* canHardware, Stm32Scheduler* scheduler)
+void VX1::DisplayBootWelcomeScreen(CanHardware* canHardware, Stm32Scheduler* scheduler, BmsFsm* bmsFsm)
 {
     // Only proceed if VX1 mode is enabled, VX1BootLCDMsg is set to 1, VX1enCanMsg is set to 1, and this is the master node
-    if (!IsEnabled() || Param::GetInt(Param::VX1BootLCDMsg) != 1 || Param::GetInt(Param::VX1enCanMsg) != 1 || !IsMaster() || !canHardware || !scheduler)
+    if (!IsEnabled() || Param::GetInt(Param::VX1BootLCDMsg) != 1 || Param::GetInt(Param::VX1enCanMsg) != 1 || !IsMaster(bmsFsm) || !canHardware || !scheduler)
         return;
     
     // Initialize boot display variables
@@ -599,8 +793,11 @@ void VX1::DisplayBootWelcomeScreen(CanHardware* canHardware, Stm32Scheduler* sch
     bootDisplayCanHardware = canHardware;
     bootDisplayStartTime = 0;
     
-    // Add the boot display task to the scheduler (100ms interval)
-    scheduler->AddTask(BootDisplayTask, 100);
+    // Get message interval from parameter
+    uint32_t msgInterval = Param::GetInt(Param::VX1msgInterval);
+    
+    // Add the boot display task to the scheduler with the configured interval
+    scheduler->AddTask(BootDisplayTask, msgInterval);
 }
 
 /**

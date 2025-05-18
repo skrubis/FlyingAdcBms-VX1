@@ -16,4 +16,5 @@ test/test_bms
 todo.md
 *Zone.Identifier
 can-log.csv
+bootmsg-pgn.md
 VX1_CAN_PGNS_PARAMS.md

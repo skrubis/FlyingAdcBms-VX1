@@ -191,10 +191,26 @@ public:
      * 
      * @param canHardware Pointer to the CAN hardware interface
      * @param scheduler Pointer to the scheduler for timed sequences
+     * @param bmsFsm Pointer to the BmsFsm instance for master node detection
      */
-    static void DisplayBootWelcomeScreen(CanHardware* canHardware, Stm32Scheduler* scheduler);
+    static void DisplayBootWelcomeScreen(CanHardware* canHardware, Stm32Scheduler* scheduler, BmsFsm* bmsFsm = nullptr);
+    
+    /**
+     * @brief Check if boot display should be initialized and do so if needed
+     *
+     * This should be called periodically (e.g., from Ms100Task) to initialize 
+     * the boot display sequence when the BMS is properly running.
+     * 
+     * @param canHardware Pointer to the CAN hardware interface
+     * @param scheduler Pointer to the scheduler for timed sequences
+     * @param bmsFsm Pointer to the BmsFsm instance for master node detection
+     */
+    static void CheckAndInitBootDisplay(CanHardware* canHardware, Stm32Scheduler* scheduler, BmsFsm* bmsFsm);
 
 private:
+    // Convert ASCII character to 7-segment display code
+    static uint8_t CharToSegment(char ch);
+    
     static char odometerMessage[7]; // 6 characters + null terminator
     static bool displayActive;
     // Current telltale states
