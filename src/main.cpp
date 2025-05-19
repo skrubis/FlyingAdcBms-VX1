@@ -133,15 +133,20 @@ static void CalculateSocSoh(BmsFsm::bmsstate stt, BmsFsm::bmsstate laststt)
 static void Ms100Task(void)
 {
    static uint8_t ledDivider = 0;
-   //The boot loader enables the watchdog, we have to reset it
-   //at least every 2s or otherwise the controller is hard reset.
    iwdg_reset();
    float cpuLoad = scheduler->GetCpuLoad();
    Param::SetFloat(Param::cpuload, cpuLoad / 10);
 
    // Check and initialize boot display if needed
-   VX1::CheckAndInitBootDisplay(canMapExternal->GetHardware(), scheduler, bmsFsm);
-
+   if (bmsFsm != nullptr) {
+       VX1::CheckAndInitBootDisplay(canMapExternal->GetHardware(), scheduler, bmsFsm);
+       
+       // Run VX1 error and warning reporting tasks
+       VX1::ErrorReportingTask(canMapExternal->GetHardware(), bmsFsm);
+       VX1::TemperatureWarningTask(canMapExternal->GetHardware(), bmsFsm);
+       VX1::UDeltaWarningTask(canMapExternal->GetHardware(), bmsFsm);
+   }
+   
    if (Param::GetInt(Param::opmode) != BmsFsm::ERROR)
       DigIo::led_out.Toggle();
    else //blink slower when an error is detected

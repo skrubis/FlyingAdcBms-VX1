@@ -19,9 +19,20 @@
 
 #include "vx1.h"
 #include <libopencm3/stm32/f1/bkp.h>
+#include <cmath>   // For fabs
+#include "printf.h"  // Use project's printf implementation
 // param_prj.h is already included via params.h in vx1.h
 
 // No external references needed
+
+// Define error short code lookup table matching enum order from errormessage_prj.h
+const VX1::ErrorShortCode VX1::ERROR_SHORT_CODES[] = {
+    // Direct mapping to ERROR_MESSAGE_NUM enum values
+    {ERR_MUXSHORT, "MSH"},         // ERR_MUXSHORT = 1
+    {ERR_BALANCER_FAIL, "BAL"},    // ERR_BALANCER_FAIL = 2
+    {ERR_CELL_POLARITY, "CPOL"},   // ERR_CELL_POLARITY = 3
+    {ERR_CELL_OVERVOLTAGE, "COV"}  // ERR_CELL_OVERVOLTAGE = 4
+};
 
 // Define static class members
 char VX1::odometerMessage[7] = "      "; // Initialize with spaces
@@ -37,6 +48,19 @@ bool VX1::telltaleActive = false;
 char VX1::clockSegments[5] = "    "; // Initialize with spaces
 char VX1::clockChargerIndicator = 0x00;
 bool VX1::clockActive = false;
+
+// Error reporting states
+bool VX1::errorActive = false;
+ERROR_MESSAGE_NUM VX1::currentError = ERROR_NONE;
+uint8_t VX1::errorNodeId = 0;
+
+// Temperature warning states
+bool VX1::tempWarningActive = false;
+float VX1::currentTempWarning = 0.0f;
+
+// Voltage delta warning states
+bool VX1::uDeltaWarningActive = false;
+float VX1::currentUDeltaWarning = 0.0f;
 
 // J1939 PGN for VX1 odometer display
 #define VX1_ODOMETER_PGN 0x00FEED
@@ -952,4 +976,275 @@ bool VX1::SendTelltaleControl(
     canHardware->Send(msg.id, (uint32_t*)msg.data, 8);
     
     return true;
+}
+
+/**
+ * Report an error by showing blinking battery and wrench telltales and error message on odometer
+ * 
+ * @param errorCode The error code to report
+ * @param nodeId The node ID of the BMS reporting the error
+ * @param canHardware Pointer to the CAN hardware interface
+ * @return true if the error message was sent successfully
+ */
+bool VX1::ReportError(ERROR_MESSAGE_NUM errorCode, uint8_t nodeId, CanHardware* canHardware)
+{
+    // Check if VX1 mode is enabled, VX1enCanMsg is set to 1, VX1ErrWarn is set to 1, and we have a valid CAN interface
+    if (!IsEnabled() || !canHardware || Param::GetInt(Param::VX1enCanMsg) != 1 || Param::GetInt(Param::VX1ErrWarn) != 1)
+        return false;
+    
+    // Store error state
+    errorActive = true;
+    currentError = errorCode;
+    errorNodeId = nodeId;
+    
+    // Set telltales to blinking
+    SetTelltaleState(TelltaleType::BATTERY, TelltaleState::BLINKING);
+    SetTelltaleState(TelltaleType::WRENCH, TelltaleState::BLINKING);
+    SendTelltaleControl(canHardware);
+    
+    // Find the error short code matching the error code
+    const char* shortCode = "ERR";
+    for (size_t i = 0; i < sizeof(ERROR_SHORT_CODES) / sizeof(ERROR_SHORT_CODES[0]); i++) {
+        if (ERROR_SHORT_CODES[i].errorCode == errorCode) {
+            shortCode = ERROR_SHORT_CODES[i].shortCode;
+            break;
+        }
+    }
+    
+    // Create the error message with node ID and short code
+    char errorMessage[7];
+    sprintf(errorMessage, "%2d %s", nodeId, shortCode);
+    
+    // Send the error message to the odometer
+    return SendOdometerMessage(errorMessage, canHardware);
+}
+
+/**
+ * Error reporting task - should be called periodically
+ * 
+ * @param canHardware Pointer to the CAN hardware interface
+ * @param bmsFsm Pointer to the BmsFsm instance
+ */
+void VX1::ErrorReportingTask(CanHardware* canHardware, BmsFsm* bmsFsm)
+{
+    // Check if VX1 mode is enabled, VX1enCanMsg is set to 1, VX1ErrWarn is set to 1, and we have a valid CAN interface
+    if (!IsEnabled() || !canHardware || Param::GetInt(Param::VX1enCanMsg) != 1 || Param::GetInt(Param::VX1ErrWarn) != 1)
+        return;
+    
+    // Get current errors (if any)
+    ERROR_MESSAGE_NUM error = ErrorMessage::GetLastError();
+    
+    // If there's an error, report it
+    if (error != ERROR_NONE) {
+        // Only report if not already reporting this error
+        if (!errorActive || error != currentError) {
+            uint8_t nodeId = Param::GetInt(Param::modaddr);
+            ReportError(error, nodeId, canHardware);
+        }
+        else {
+            // Refresh telltales and odometer message periodically
+            SendTelltaleControl(canHardware);
+            
+            // Create the error message with node ID and short code
+            char errorMessage[7];
+            
+            // Find the error short code matching the error code
+            const char* shortCode = "ERR";
+            for (size_t i = 0; i < sizeof(ERROR_SHORT_CODES) / sizeof(ERROR_SHORT_CODES[0]); i++) {
+                if (ERROR_SHORT_CODES[i].errorCode == currentError) {
+                    shortCode = ERROR_SHORT_CODES[i].shortCode;
+                    break;
+                }
+            }
+            
+            sprintf(errorMessage, "%2d %s", errorNodeId, shortCode);
+            SendOdometerMessage(errorMessage, canHardware);
+        }
+    }
+    else if (errorActive) {
+        // Error cleared, reset state
+        errorActive = false;
+        SetTelltaleState(TelltaleType::BATTERY, TelltaleState::OFF);
+        SetTelltaleState(TelltaleType::WRENCH, TelltaleState::OFF);
+        SendTelltaleControl(canHardware);
+        
+        // Clear the odometer message (only if no other warnings are active)
+        if (!tempWarningActive && !uDeltaWarningActive) {
+            SendOdometerMessage("      ", canHardware);
+        }
+    }
+}
+
+/**
+ * Report temperature warning by blinking battery telltale and showing tempmax on odometer
+ * 
+ * @param temperature The temperature value to report
+ * @param canHardware Pointer to the CAN hardware interface
+ * @return true if the warning message was sent successfully
+ */
+bool VX1::ReportTemperatureWarning(float temperature, CanHardware* canHardware)
+{
+    // Check if VX1 mode is enabled, VX1enCanMsg is set to 1, VX1TempWarn is set to 1, and we have a valid CAN interface
+    if (!IsEnabled() || !canHardware || Param::GetInt(Param::VX1enCanMsg) != 1 || Param::GetInt(Param::VX1TempWarn) != 1)
+        return false;
+    
+    // Store temperature warning state
+    tempWarningActive = true;
+    currentTempWarning = temperature;
+    
+    // Set battery telltale to blinking (don't affect wrench if it's already set for another reason)
+    SetTelltaleState(TelltaleType::BATTERY, TelltaleState::BLINKING);
+    SendTelltaleControl(canHardware);
+    
+    // Format the temperature message
+    char tempMessage[7];
+    sprintf(tempMessage, "t %3d", static_cast<int>(temperature));
+    
+    // Send the temperature message to the odometer
+    return SendOdometerMessage(tempMessage, canHardware);
+}
+
+/**
+ * Temperature warning task - should be called periodically
+ * 
+ * @param canHardware Pointer to the CAN hardware interface
+ * @param bmsFsm Pointer to the BmsFsm instance
+ */
+void VX1::TemperatureWarningTask(CanHardware* canHardware, BmsFsm* bmsFsm)
+{
+    // Check if VX1 mode is enabled, VX1enCanMsg is set to 1, VX1TempWarn is set to 1, and we have a valid CAN interface
+    if (!IsEnabled() || !canHardware || Param::GetInt(Param::VX1enCanMsg) != 1 || Param::GetInt(Param::VX1TempWarn) != 1)
+        return;
+    
+    // Check if test mode is enabled
+    if (Param::GetInt(Param::VX1TempWarnTest) == 1) {
+        if (!tempWarningActive) {
+            // Simulate a temperature warning
+            ReportTemperatureWarning(99.0f, canHardware);
+        }
+        return;
+    }
+    
+    // Get current temperature
+    float tempMax = Param::GetFloat(Param::tempmax);
+    float tempWarnPoint = Param::GetFloat(Param::VX1TempWarnPoint);
+    
+    // If temperature exceeds warning threshold, report it
+    if (tempMax >= tempWarnPoint) {
+        // Only report if not already reporting or if temperature has changed significantly
+        if (!tempWarningActive || fabs(tempMax - currentTempWarning) >= 1.0f) {
+            ReportTemperatureWarning(tempMax, canHardware);
+        }
+        else {
+            // Refresh telltales and odometer message periodically
+            SendTelltaleControl(canHardware);
+            
+            // Refresh temperature message
+            char tempMessage[7];
+            sprintf(tempMessage, "t %3d", static_cast<int>(currentTempWarning));
+            SendOdometerMessage(tempMessage, canHardware);
+        }
+    }
+    else if (tempWarningActive) {
+        // Temperature is now below threshold, clear the warning
+        tempWarningActive = false;
+        
+        // Keep battery telltale blinking only if error is active, otherwise turn it off
+        if (!errorActive) {
+            SetTelltaleState(TelltaleType::BATTERY, TelltaleState::OFF);
+            SendTelltaleControl(canHardware);
+        }
+        
+        // Clear the odometer message (only if no other warnings are active)
+        if (!errorActive && !uDeltaWarningActive) {
+            SendOdometerMessage("      ", canHardware);
+        }
+    }
+}
+
+/**
+ * Report voltage delta warning by turning on solid wrench telltale and showing udelta on odometer
+ * 
+ * @param uDelta The voltage delta value to report
+ * @param canHardware Pointer to the CAN hardware interface
+ * @return true if the warning message was sent successfully
+ */
+bool VX1::ReportUDeltaWarning(float uDelta, CanHardware* canHardware)
+{
+    // Check if VX1 mode is enabled, VX1enCanMsg is set to 1, VX1uDeltaWarn is set to 1, and we have a valid CAN interface
+    if (!IsEnabled() || !canHardware || Param::GetInt(Param::VX1enCanMsg) != 1 || Param::GetInt(Param::VX1uDeltaWarn) != 1)
+        return false;
+    
+    // Store uDelta warning state
+    uDeltaWarningActive = true;
+    currentUDeltaWarning = uDelta;
+    
+    // Set wrench telltale to solid ON (don't affect battery if it's already set for another reason)
+    SetTelltaleState(TelltaleType::WRENCH, TelltaleState::ON);
+    SendTelltaleControl(canHardware);
+    
+    // Format the udelta message (same format as in boot screen)
+    char uDeltaMessage[7];
+    sprintf(uDeltaMessage, "u %3d", static_cast<int>(uDelta));
+    
+    // Send the udelta message to the odometer
+    return SendOdometerMessage(uDeltaMessage, canHardware);
+}
+
+/**
+ * Voltage delta warning task - should be called periodically
+ * 
+ * @param canHardware Pointer to the CAN hardware interface
+ * @param bmsFsm Pointer to the BmsFsm instance
+ */
+void VX1::UDeltaWarningTask(CanHardware* canHardware, BmsFsm* bmsFsm)
+{
+    // Check if VX1 mode is enabled, VX1enCanMsg is set to 1, VX1uDeltaWarn is set to 1, and we have a valid CAN interface
+    if (!IsEnabled() || !canHardware || Param::GetInt(Param::VX1enCanMsg) != 1 || Param::GetInt(Param::VX1uDeltaWarn) != 1)
+        return;
+    
+    // Check if test mode is enabled
+    if (Param::GetInt(Param::VX1uDeltaWarnTest) == 1) {
+        if (!uDeltaWarningActive) {
+            // Simulate a udelta warning
+            ReportUDeltaWarning(250.0f, canHardware);
+        }
+        return;
+    }
+    
+    // Get current uDelta
+    float uDelta = Param::GetFloat(Param::udelta);
+    float uDeltaTresh = Param::GetFloat(Param::VX1uDeltaWarnTresh);
+    
+    // If uDelta exceeds warning threshold, report it
+    if (uDelta >= uDeltaTresh) {
+        // Only report if not already reporting or if uDelta has changed significantly
+        if (!uDeltaWarningActive || fabs(uDelta - currentUDeltaWarning) >= 5.0f) {
+            ReportUDeltaWarning(uDelta, canHardware);
+        }
+        else {
+            // Refresh telltales and odometer message periodically
+            SendTelltaleControl(canHardware);
+            
+            // Refresh udelta message
+            char uDeltaMessage[7];
+            sprintf(uDeltaMessage, "u %3d", static_cast<int>(currentUDeltaWarning));
+            SendOdometerMessage(uDeltaMessage, canHardware);
+        }
+    }
+    else if (uDeltaWarningActive) {
+        // uDelta is now below threshold, clear the warning
+        uDeltaWarningActive = false;
+        
+        // Keep wrench telltale on only if error is active, otherwise turn it off
+        if (!errorActive) {
+            SetTelltaleState(TelltaleType::WRENCH, TelltaleState::OFF);
+            SendTelltaleControl(canHardware);
+        }
+        
+        // Clear the odometer message (only if no other warnings are active)
+        if (!errorActive && !tempWarningActive) {
+            SendOdometerMessage("      ", canHardware);
+        }
+    }
 }

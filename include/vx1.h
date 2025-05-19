@@ -24,6 +24,7 @@
 #include "canhardware.h"
 #include "bmsfsm.h"
 #include "stm32scheduler.h"
+#include "errormessage.h"
 #include <string.h>
 
 /**
@@ -34,6 +35,17 @@
 class VX1
 {
 public:
+    /**
+     * @brief Error message short codes for display on odometer
+     */
+    struct ErrorShortCode {
+        ERROR_MESSAGE_NUM errorCode;
+        const char* shortCode;
+    };
+    
+    // Error short code lookup table for the LCD display
+    static const ErrorShortCode ERROR_SHORT_CODES[];
+    
     /**
      * @brief Initialize VX1 module
      */
@@ -192,6 +204,58 @@ public:
     static void DisplayBootWelcomeScreen(CanHardware* canHardware, Stm32Scheduler* scheduler, BmsFsm* bmsFsm = nullptr);
     
     /**
+     * @brief Report an error by showing blinking battery and wrench telltales and error message on odometer
+     * 
+     * @param errorCode The error code to report
+     * @param nodeId The node ID of the BMS reporting the error
+     * @param canHardware Pointer to the CAN hardware interface
+     * @return true if the error message was sent successfully
+     */
+    static bool ReportError(ERROR_MESSAGE_NUM errorCode, uint8_t nodeId, CanHardware* canHardware);
+    
+    /**
+     * @brief Error reporting task - should be called periodically
+     * 
+     * @param canHardware Pointer to the CAN hardware interface
+     * @param bmsFsm Pointer to the BmsFsm instance
+     */
+    static void ErrorReportingTask(CanHardware* canHardware, BmsFsm* bmsFsm);
+    
+    /**
+     * @brief Report temperature warning by blinking battery telltale and showing tempmax on odometer
+     * 
+     * @param temperature The temperature value to report
+     * @param canHardware Pointer to the CAN hardware interface
+     * @return true if the warning message was sent successfully
+     */
+    static bool ReportTemperatureWarning(float temperature, CanHardware* canHardware);
+    
+    /**
+     * @brief Temperature warning task - should be called periodically
+     * 
+     * @param canHardware Pointer to the CAN hardware interface
+     * @param bmsFsm Pointer to the BmsFsm instance
+     */
+    static void TemperatureWarningTask(CanHardware* canHardware, BmsFsm* bmsFsm);
+    
+    /**
+     * @brief Report voltage delta warning by turning on solid wrench telltale and showing udelta on odometer
+     * 
+     * @param uDelta The voltage delta value to report
+     * @param canHardware Pointer to the CAN hardware interface
+     * @return true if the warning message was sent successfully
+     */
+    static bool ReportUDeltaWarning(float uDelta, CanHardware* canHardware);
+    
+    /**
+     * @brief Voltage delta warning task - should be called periodically
+     * 
+     * @param canHardware Pointer to the CAN hardware interface
+     * @param bmsFsm Pointer to the BmsFsm instance
+     */
+    static void UDeltaWarningTask(CanHardware* canHardware, BmsFsm* bmsFsm);
+    
+    /**
      * @brief Check if boot display should be initialized and do so if needed
      *
      * This should be called periodically (e.g., from Ms100Task) to initialize 
@@ -219,6 +283,19 @@ private:
     static char clockSegments[5]; // 4 segments + null terminator
     static char clockChargerIndicator;
     static bool clockActive;
+    
+    // Error reporting states
+    static bool errorActive;
+    static ERROR_MESSAGE_NUM currentError;
+    static uint8_t errorNodeId;
+    
+    // Temperature warning states
+    static bool tempWarningActive;
+    static float currentTempWarning;
+    
+    // Voltage delta warning states
+    static bool uDeltaWarningActive;
+    static float currentUDeltaWarning;
 };
 
 #endif // VX1_H
