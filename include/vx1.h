@@ -156,13 +156,26 @@ public:
     static bool SendClockMessage(CanHardware* canHardware, uint8_t sourceAddress = 0xF9, bool masterOnly = false, bool override = true);
     
     /**
-     * @brief Task to periodically send the clock message (call every 100ms)
+     * Task to periodically send the clock message (call every 100ms)
      * 
      * This should be added to the scheduler if continuous display is needed
      * @param canHardware Pointer to the CAN hardware interface
      * @param masterOnly If true, only the master node can send the message (default false)
      */
     static void ClockDisplayTask(CanHardware* canHardware, bool masterOnly = false);
+    
+    /**
+     * Display user configurable stats on the clock display
+     * 
+     * This function checks if conditions are met to display stats on the clock display:
+     * - VX1mode must be 1 (enabled)
+     * - VX1LCDClockStats must be 1 (always) or 2 (only when idle)
+     * - If VX1LCDClockStats is 2, idlecurrent > idcavg must be true
+     * 
+     * @param canHardware Pointer to the CAN hardware interface
+     * @param bmsFsm Pointer to the BmsFsm instance for master node detection
+     */
+    static void ClockStatsDisplayTask(CanHardware* canHardware, BmsFsm* bmsFsm = nullptr);
     
     /**
      * @brief Send a message to the VX1 odometer display

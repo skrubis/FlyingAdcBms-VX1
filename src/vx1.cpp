@@ -71,6 +71,9 @@ float VX1::currentUDeltaWarning = 0.0f;
 // J1939 PGN for VX1 telltale control
 #define VX1_TELLTALE_PGN 0x00FECA
 
+// J1939 PGN for VX1 clock display
+#define VX1_CLOCK_PGN 0x00FEEC
+
 // Boot display sequence states
 enum BootDisplayState {
     BOOT_DISPLAY_IDLE,
@@ -316,6 +319,28 @@ bool VX1::SendOdometerMessage(const char* message, CanHardware* canHardware, uin
  */
 void VX1::OdometerDisplayTask(CanHardware* canHardware, bool masterOnly)
 {
+    // Check if we have a valid CAN interface
+    if (!canHardware)
+        return;
+        
+    // If VX1 mode is disabled or display is not active, send a clear message
+    if (!IsEnabled() || !displayActive)
+    {
+        // Create empty message to clear the display
+        uint8_t clearData[8] = {0};
+        clearData[7] = VX1_OVERRIDE_NORMAL; // Use normal override to allow other messages
+        
+        // Send clear message to the odometer display
+        uint32_t j1939Id = (3 << 26) | (VX1_ODOMETER_PGN << 8) | 0x80;
+        canHardware->Send(j1939Id, clearData, 8);
+        
+        // Also try with a different source address to ensure it gets cleared
+        j1939Id = (3 << 26) | (VX1_ODOMETER_PGN << 8) | 0xF9;
+        canHardware->Send(j1939Id, clearData, 8);
+        
+        return;
+    }
+    
     // Only proceed if display is active and VX1 mode is enabled
     // If masterOnly is true, also check if this is the master node
     if (displayActive && IsEnabled() && (!masterOnly || IsMaster()))
@@ -410,23 +435,59 @@ bool VX1::SendClockMessage(CanHardware* canHardware, uint8_t sourceAddress, bool
         return false;
     
     // Prepare the J1939 message
-    uint32_t data[2] = {0, 0};
-    uint8_t* bytes = (uint8_t*)data;
+    uint8_t data[8] = {0};
     
-    // Format: 4 clock segments, 2 empty segments, charger indicator, override
-    bytes[0] = clockSegments[0]; // Segment 1 (rightmost)
-    bytes[1] = clockSegments[1]; // Segment 2
-    bytes[2] = clockSegments[2]; // Segment 3
-    bytes[3] = clockSegments[3]; // Segment 4 (leftmost)
-    bytes[4] = ' ';              // Empty segment 5
-    bytes[5] = ' ';              // Empty segment 6
-    bytes[6] = clockChargerIndicator; // Charger indicator
-    bytes[7] = override ? VX1_OVERRIDE_FORCE : VX1_OVERRIDE_NORMAL; // Override control
+    // For debugging, use direct hex values for 7-segment codes
+    // This ensures we're sending the exact values expected by the display
+    // Byte 0 is the most right character on the display
+    
+    // Convert ASCII characters to 7-segment display codes
+    // The segments are mapped as follows (bit position):
+    //    0
+    //  5   1
+    //    6
+    //  4   2
+    //    3   7(dp)
+    // For example, '0' = segments 0,1,2,3,4,5 = 0x3F
+    
+    // Map common characters to their 7-segment codes
+    uint8_t segmentCodes[4];
+    for (int i = 0; i < 4; i++) {
+        char ch = clockSegments[i];
+        switch (ch) {
+            case '0': segmentCodes[i] = 0x3F; break; // 0,1,2,3,4,5
+            case '1': segmentCodes[i] = 0x06; break; // 1,2
+            case '2': segmentCodes[i] = 0x5B; break; // 0,1,3,4,6
+            case '3': segmentCodes[i] = 0x4F; break; // 0,1,2,3,6
+            case '4': segmentCodes[i] = 0x66; break; // 1,2,5,6
+            case '5': segmentCodes[i] = 0x6D; break; // 0,2,3,5,6
+            case '6': segmentCodes[i] = 0x7D; break; // 0,2,3,4,5,6
+            case '7': segmentCodes[i] = 0x07; break; // 0,1,2
+            case '8': segmentCodes[i] = 0x7F; break; // 0,1,2,3,4,5,6
+            case '9': segmentCodes[i] = 0x6F; break; // 0,1,2,3,5,6
+            case '+': segmentCodes[i] = 0x70; break; // 2,3,6
+            case '-': segmentCodes[i] = 0x40; break; // 6
+            case '.': segmentCodes[i] = 0x80; break; // 7 (decimal point)
+            case ' ': segmentCodes[i] = 0x00; break; // blank
+            case '%': segmentCodes[i] = 0x63; break; // custom for percent
+            default:  segmentCodes[i] = 0x00; break; // blank for unknown
+        }
+    }
+    
+    // Assign the segment codes to the data bytes
+    data[0] = segmentCodes[0]; // Rightmost digit
+    data[1] = segmentCodes[1];
+    data[2] = segmentCodes[2];
+    data[3] = segmentCodes[3]; // Leftmost digit
+    data[4] = 0x00;           // Empty segment 5
+    data[5] = 0x00;           // Empty segment 6
+    data[6] = clockChargerIndicator; // Charger indicator
+    data[7] = override ? VX1_OVERRIDE_FORCE : VX1_OVERRIDE_NORMAL; // Override control
     
     // Calculate the J1939 29-bit ID
     // Format: Priority (3 bits) | PGN (18 bits) | Source Address (8 bits)
-    // Priority 3 (0b011) << 26 | PGN 0x00FEED << 8 | Source Address
-    uint32_t j1939Id = (3 << 26) | (VX1_ODOMETER_PGN << 8) | sourceAddress;
+    // Priority 3 (0b011) << 26 | PGN 0x00FEEC << 8 | Source Address
+    uint32_t j1939Id = (3 << 26) | (VX1_CLOCK_PGN << 8) | sourceAddress;
     
     // Send the message
     canHardware->Send(j1939Id, data, 8);
@@ -867,6 +928,224 @@ void VX1::CheckAndInitBootDisplay(CanHardware* canHardware, Stm32Scheduler* sche
         bootDisplayInitialized = true;
         DisplayBootWelcomeScreen(canHardware, scheduler, bmsFsm);
     }
+}
+
+/**
+ * Display user configurable stats on the clock display
+ * 
+ * This function checks if conditions are met to display stats on the clock display:
+ * - VX1mode must be 1 (enabled)
+ * - VX1LCDClockStats must be 1 (always) or 2 (only when idle)
+ * - If VX1LCDClockStats is 2, idlecurrent > idcavg must be true
+ * 
+ * @param canHardware Pointer to the CAN hardware interface
+ * @param bmsFsm Pointer to the BmsFsm instance for master node detection
+ */
+void VX1::ClockStatsDisplayTask(CanHardware* canHardware, BmsFsm* bmsFsm)
+{
+    // Check if we have a valid CAN interface
+    if (!canHardware)
+        return;
+    
+    // Basic checks for VX1 mode and master node
+    if (!IsEnabled() || !IsMaster(bmsFsm) || Param::GetInt(Param::VX1enCanMsg) != 1)
+        return;
+    
+    // Check if clock stats display is enabled
+    int clockStatsMode = Param::GetInt(Param::VX1LCDClockStats);
+    
+    // If stats display is disabled, clear the display and return
+    if (clockStatsMode == 0) {
+        // Create empty message to clear the display
+        uint8_t clearData[8] = {0};
+        clearData[7] = VX1_OVERRIDE_NORMAL; // Use normal override to allow other messages
+        
+        // Send clear message to the clock display
+        uint32_t j1939Id = (3 << 26) | (VX1_CLOCK_PGN << 8) | 0xF9;
+        canHardware->Send(j1939Id, clearData, 8);
+        
+        // Also try with a different source address to ensure it gets cleared
+        j1939Id = (3 << 26) | (VX1_CLOCK_PGN << 8) | 0x80;
+        canHardware->Send(j1939Id, clearData, 8);
+        
+        return;
+    }
+    
+    // If mode is 2 (idle only), check if idlecurrent > idcavg
+    if (clockStatsMode == 2)
+    {
+        float idleCurrent = Param::GetFloat(Param::idlecurrent);
+        float idcAvg = Param::GetFloat(Param::idcavg);
+        
+        // Only show stats when idlecurrent > idcavg (battery is idle)
+        if (idleCurrent <= idcAvg)
+            return;
+    }
+    
+    // Get the selected stat value to display
+    int statValue = Param::GetInt(Param::VX1LCDClockStatVal);
+    char displayStr[5] = "    "; // 4 characters + null terminator
+    
+    // Format the display string based on the selected stat
+    switch (statValue)
+    {
+        case 0: // SOC
+        {
+            int soc = static_cast<int>(Param::GetFloat(Param::soc));
+            sprintf(displayStr, "%3d%%", soc);
+            break;
+        }
+        case 1: // uavg (average cell voltage)
+        {
+            int uavg = static_cast<int>(Param::GetFloat(Param::uavg));
+            sprintf(displayStr, "%4d", uavg);
+            break;
+        }
+        case 2: // udelta (voltage delta)
+        {
+            int udelta = static_cast<int>(Param::GetFloat(Param::udelta));
+            sprintf(displayStr, "%4d", udelta);
+            break;
+        }
+        case 3: // tempmax (maximum temperature)
+        {
+            int tempmax = static_cast<int>(Param::GetFloat(Param::tempmax));
+            // If temperature is positive, don't show the + sign
+            if (tempmax >= 0)
+                sprintf(displayStr, "%3d ", tempmax);
+            else
+                sprintf(displayStr, "%3d ", tempmax);
+            break;
+        }
+        case 4: // power
+        {
+            float power = Param::GetFloat(Param::power);
+            // Handle power display with kW conversion if needed
+            if (fabs(power) >= 10000)
+            {
+                // Convert to kW and show with 1 decimal place
+                float kw = power / 1000.0f;
+                
+                // Format differently based on sign
+                if (power >= 0)
+                    sprintf(displayStr, "%3.1f", kw);
+                else
+                    sprintf(displayStr, "-%2.1f", fabs(kw));
+            }
+            else
+            {
+                // Show in watts, no decimals
+                int watts = static_cast<int>(power);
+                if (power >= 0)
+                    sprintf(displayStr, "%4d", watts);
+                else
+                    sprintf(displayStr, "-%3d", -watts);
+            }
+            break;
+        }
+        case 5: // idcavg (average current)
+        {
+            float idcavg = Param::GetFloat(Param::idcavg);
+            int current = static_cast<int>(idcavg);
+            
+            // Format based on sign and magnitude
+            if (current == 0) {
+                // For zero, just display a single "0"
+                sprintf(displayStr, "    "); // Clear the string
+                displayStr[3] = '0'; // Put 0 in the rightmost position
+            } else if (abs(current) < 10) {
+                // Single digit current (1-9)
+                if (idcavg >= 0)
+                    sprintf(displayStr, "   %d+", current); // Positive (charging)
+                else
+                    sprintf(displayStr, "   %d-", -current); // Negative (discharging)
+            } else if (abs(current) < 100) {
+                // Two digit current (10-99)
+                if (idcavg >= 0)
+                    sprintf(displayStr, "  %d+", current); // Positive (charging)
+                else
+                    sprintf(displayStr, "  %d-", -current); // Negative (discharging)
+            } else {
+                // Three digit current (100+)
+                if (idcavg >= 0)
+                    sprintf(displayStr, " %d+", current); // Positive (charging)
+                else
+                    sprintf(displayStr, " %d-", -current); // Negative (discharging)
+            }
+            break;
+        }
+        default:
+            // Default to showing udelta if invalid value
+            sprintf(displayStr, "%4d", static_cast<int>(Param::GetFloat(Param::udelta)));
+            break;
+    }
+    
+    // Prepare the J1939 message for clock display
+    uint8_t data[8] = {0};
+    
+    // Handle different display formats based on the number of significant digits
+    // First, determine how many significant digits we have
+    int significantDigits = 0;
+    for (int i = 0; i < 4; i++) {
+        if (displayStr[i] != ' ') {
+            significantDigits++;
+        }
+    }
+    
+    // Clear all data bytes first
+    for (int i = 0; i < 4; i++) {
+        data[i] = 0x00;
+    }
+    
+    // Handle different cases based on number of significant digits
+    if (significantDigits == 1) {
+        // Single digit - display on the third character from left (byte 1)
+        // Find the single digit in the string
+        for (int i = 0; i < 4; i++) {
+            if (displayStr[i] != ' ') {
+                data[1] = CharToSegment(displayStr[i]);
+                break;
+            }
+        }
+    } 
+    else if (significantDigits == 2) {
+        // Two digits - center on bytes 1 and 2
+        // Find the two digits in the string and store their positions
+        int digitPositions[2] = {-1, -1};
+        int digitCount = 0;
+        
+        for (int i = 0; i < 4; i++) {
+            if (displayStr[i] != ' ') {
+                digitPositions[digitCount] = i;
+                digitCount++;
+                if (digitCount >= 2) break;
+            }
+        }
+        
+        // Place the digits in the correct order (tens digit on byte 2, ones on byte 1)
+        // For example, for "10", the '1' should be on byte 2 and '0' on byte 1
+        data[2] = CharToSegment(displayStr[digitPositions[0]]); // Tens digit
+        data[1] = CharToSegment(displayStr[digitPositions[1]]); // Ones digit
+    }
+    else {
+        // 3 or 4 characters - use normal display order
+        // Byte 0 is rightmost character, byte 3 is leftmost
+        data[0] = CharToSegment(displayStr[3]); // Rightmost
+        data[1] = CharToSegment(displayStr[2]);
+        data[2] = CharToSegment(displayStr[1]);
+        data[3] = CharToSegment(displayStr[0]); // Leftmost
+    }
+    
+    data[4] = 0x00; // Empty segment 5
+    data[5] = 0x00; // Empty segment 6
+    data[6] = 0x00; // No charger indicator
+    data[7] = VX1_OVERRIDE_FORCE; // Force display
+    
+    // Calculate the J1939 29-bit ID for clock display (PGN 0xFEEC)
+    uint32_t j1939Id = (3 << 26) | (VX1_CLOCK_PGN << 8) | 0xF9;
+    
+    // Send the message directly to CAN bus
+    canHardware->Send(j1939Id, data, 8);
 }
 
 /**
