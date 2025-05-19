@@ -70,49 +70,45 @@ public:
     /**
     * @brief Telltale indicators that can be controlled
     */
-    enum Telltale {
-        TELLTALE_WRENCH = 0,    // Bits 1:0
-        TELLTALE_BATTERY = 1,   // Bits 3:2
-        TELLTALE_TEMPERATURE = 2, // Bits 5:4
-        TELLTALE_RESERVED = 3   // Bits 7:6
+    enum class TelltaleType {
+        WRENCH,
+        TEMP,
+        BATTERY
     };
 
     /**
     * @brief Telltale states
     */
-    enum TelltaleState {
-        TELLTALE_OFF = 0,    // 00 = Off
-        TELLTALE_ON = 1,     // 01 = On
-        TELLTALE_FLASH = 2,  // 10 = Flash
-        TELLTALE_UNUSED = 3  // 11 = Not used
+    enum class TelltaleState {
+        OFF,
+        ON,
+        BLINKING
+    };
+    
+    /**
+     * @brief Structure to hold telltale command information
+     */
+    struct TelltaleCommand {
+        TelltaleType type;
+        TelltaleState state;
     };
     /**
     * @brief Set the state of a specific telltale
     * 
-    * @param telltale The telltale to set
-    * @param state The state to set (OFF, ON, FLASH)
+    * @param type The telltale type to set
+    * @param state The state to set (OFF, ON, BLINKING)
     */
-    static void SetTelltaleState(Telltale telltale, TelltaleState state);
+    static void SetTelltaleState(TelltaleType type, TelltaleState state);
 
     /**
     * @brief Send a telltale control message to the VX1 display
     * 
-    * @param wrench Wrench icon state
-    * @param battery Battery icon state
-    * @param temperature Temperature icon state
-    * @param reserved Reserved bits state (default OFF)
     * @param canHardware Pointer to the CAN hardware interface
-    * @param sourceAddress Source address for the J1939 message (default 0x4C for Charger)
     * @param masterOnly If true, only the master node can send the message (default false)
     * @return true if message was sent successfully
     */
     static bool SendTelltaleControl(
-        TelltaleState wrench,
-        TelltaleState battery,
-        TelltaleState temperature,
-        TelltaleState reserved = TELLTALE_OFF,
-        CanHardware* canHardware = nullptr,
-        uint8_t sourceAddress = 0x4C,
+        CanHardware* canHardware,
         bool masterOnly = false
     );
 
@@ -215,9 +211,8 @@ private:
     static bool displayActive;
     // Current telltale states
     static TelltaleState wrenchState;
+    static TelltaleState tempState;
     static TelltaleState batteryState;
-    static TelltaleState temperatureState;
-    static TelltaleState reservedState;
     static bool telltaleActive;
     
     // Clock display data
