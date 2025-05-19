@@ -43,6 +43,7 @@ VX1::TelltaleState VX1::wrenchState = VX1::TelltaleState::OFF;
 VX1::TelltaleState VX1::tempState = VX1::TelltaleState::OFF;
 VX1::TelltaleState VX1::batteryState = VX1::TelltaleState::OFF;
 bool VX1::telltaleActive = false;
+uint32_t VX1::lastTelltaleUpdateTime = 0;
 
 // Clock display data
 char VX1::clockSegments[5] = "    "; // Initialize with spaces
@@ -918,6 +919,20 @@ bool VX1::SendTelltaleControl(
     // Check if VX1 mode is enabled, VX1enCanMsg is set to 1, and we have a valid CAN interface
     if (!IsEnabled() || !canHardware || Param::GetInt(Param::VX1enCanMsg) != 1)
         return false;
+        
+    // Get current timestamp to check rate limiting
+    uint32_t currentTime = Param::GetInt(Param::uptime);
+    
+    // Enforce rate limiting - no more than 3 messages per second (333ms min interval)
+    // The TelltaleDisplayTask updates at 10s interval through the scheduler
+    // so we don't need to specifically exclude it
+    if (lastTelltaleUpdateTime > 0 && (currentTime - lastTelltaleUpdateTime) < 333) {
+        // Too soon to send another telltale message
+        return true; // Return true to prevent caller from retrying immediately
+    }
+    
+    // Update last update time
+    lastTelltaleUpdateTime = currentTime;
         
     // If masterOnly is true, check if this is the master node
     if (masterOnly && !IsMaster())

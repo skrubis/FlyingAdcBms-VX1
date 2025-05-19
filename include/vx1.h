@@ -278,6 +278,7 @@ private:
     static TelltaleState tempState;
     static TelltaleState batteryState;
     static bool telltaleActive;
+    static uint32_t lastTelltaleUpdateTime; // Store last time telltales were updated
     
     // Clock display data
     static char clockSegments[5]; // 4 segments + null terminator
