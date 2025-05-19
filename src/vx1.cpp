@@ -458,7 +458,8 @@ void VX1::ClockDisplayTask(CanHardware* canHardware, bool masterOnly)
 static void BootDisplayTask()
 {
     // Only proceed if we're in an active boot display state, VX1 mode is enabled, and VX1enCanMsg is set to 1
-    if (bootDisplayState == BOOT_DISPLAY_IDLE || bootDisplayState == BOOT_DISPLAY_DONE || 
+    // Note: We allow BOOT_DISPLAY_DONE state to proceed so we can clear the display
+    if (bootDisplayState == BOOT_DISPLAY_IDLE || 
         !bootDisplayCanHardware || !VX1::IsEnabled() || Param::GetInt(Param::VX1enCanMsg) != 1)
         return;
     
@@ -811,17 +812,14 @@ static void BootDisplayTask()
                 bootDisplayTimer = 0;
             }
             break;
-            
+        
         case BOOT_DISPLAY_DONE:
             // We need to send multiple empty messages to properly clear the display
             if (currentTime < 20) // Send 20 empty messages to ensure display is cleared
             {
-                // Send empty message with the exact ID and data format
-                uint8_t clearData[8] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xAA};
-                uint32_t clearId = 0x18FEEDF9; // Exact ID from CAN monitor
-                
-                // Send the message directly
-                bootDisplayCanHardware->Send(clearId, (uint32_t*)clearData, 8);
+                // Set empty message and send it with consistent source address
+                VX1::SetOdometerMessage("      ");
+                VX1::SendOdometerMessage(nullptr, bootDisplayCanHardware, 0xF9, false);
             }
             else if (currentTime == 20)
             {
@@ -832,9 +830,8 @@ static void BootDisplayTask()
                 VX1::SendTelltaleControl(bootDisplayCanHardware, false);
                 
                 // Send one more clear message to ensure clearing
-                uint8_t clearData[8] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xAA};
-                uint32_t clearId = 0x18FEEDF9; // Exact ID from CAN monitor
-                bootDisplayCanHardware->Send(clearId, (uint32_t*)clearData, 8);
+                VX1::SetOdometerMessage("      ");
+                VX1::SendOdometerMessage(nullptr, bootDisplayCanHardware, 0xF9, false);
             }
             else
             {
@@ -923,10 +920,11 @@ bool VX1::SendTelltaleControl(
     // Get current timestamp to check rate limiting
     uint32_t currentTime = Param::GetInt(Param::uptime);
     
-    // Enforce rate limiting - no more than 3 messages per second (333ms min interval)
-    // The TelltaleDisplayTask updates at 10s interval through the scheduler
-    // so we don't need to specifically exclude it
-    if (lastTelltaleUpdateTime > 0 && (currentTime - lastTelltaleUpdateTime) < 333) {
+    // Respect 10s timeout for telltales as per VX1 specification
+    // We'll refresh at most every 3 seconds (3000ms) to ensure telltales stay active
+    // Normal message rate should be 3 times a second at most (333ms)
+    // For telltales, we'll use a moderate 3-second frequency to avoid CAN bus congestion
+    if (lastTelltaleUpdateTime > 0 && (currentTime - lastTelltaleUpdateTime) < 3000) {
         // Too soon to send another telltale message
         return true; // Return true to prevent caller from retrying immediately
     }
@@ -987,8 +985,8 @@ bool VX1::SendTelltaleControl(
             break; // OFF remains 00
     }
     
-    // Send the message
-    canHardware->Send(msg.id, (uint32_t*)msg.data, 8);
+    // Send the message - fix type casting issue
+    canHardware->Send(msg.id, msg.data, 8);
     
     return true;
 }
@@ -1015,7 +1013,7 @@ bool VX1::ReportError(ERROR_MESSAGE_NUM errorCode, uint8_t nodeId, CanHardware* 
     // Set telltales to blinking
     SetTelltaleState(TelltaleType::BATTERY, TelltaleState::BLINKING);
     SetTelltaleState(TelltaleType::WRENCH, TelltaleState::BLINKING);
-    SendTelltaleControl(canHardware);
+    SendTelltaleControl(canHardware, false);
     
     // Find the error short code matching the error code
     const char* shortCode = "ERR";
@@ -1040,10 +1038,14 @@ bool VX1::ReportError(ERROR_MESSAGE_NUM errorCode, uint8_t nodeId, CanHardware* 
  * @param canHardware Pointer to the CAN hardware interface
  * @param bmsFsm Pointer to the BmsFsm instance
  */
-void VX1::ErrorReportingTask(CanHardware* canHardware, BmsFsm* bmsFsm)
+void VX1::ErrorReportingTask(CanHardware* canHardware, BmsFsm* /*unused*/)
 {
-    // Check if VX1 mode is enabled, VX1enCanMsg is set to 1, VX1ErrWarn is set to 1, and we have a valid CAN interface
-    if (!IsEnabled() || !canHardware || Param::GetInt(Param::VX1enCanMsg) != 1 || Param::GetInt(Param::VX1ErrWarn) != 1)
+    // Check if we have a valid CAN interface
+    if (!canHardware)
+        return;
+    
+    // Basic checks for VX1 mode - these are critical
+    if (!IsEnabled() || Param::GetInt(Param::VX1enCanMsg) != 1 || Param::GetInt(Param::VX1ErrWarn) != 1)
         return;
     
     // Get current errors (if any)
@@ -1051,41 +1053,70 @@ void VX1::ErrorReportingTask(CanHardware* canHardware, BmsFsm* bmsFsm)
     
     // If there's an error, report it
     if (error != ERROR_NONE) {
-        // Only report if not already reporting this error
+        // Only update the stored error if not already reporting this error
         if (!errorActive || error != currentError) {
             uint8_t nodeId = Param::GetInt(Param::modaddr);
-            ReportError(error, nodeId, canHardware);
+            // Update error state
+            errorActive = true;
+            currentError = error;
+            errorNodeId = nodeId;
+            
+            // Set telltales to blinking for errors
+            SetTelltaleState(TelltaleType::BATTERY, TelltaleState::BLINKING);
+            SetTelltaleState(TelltaleType::WRENCH, TelltaleState::BLINKING);
         }
-        else {
-            // Refresh telltales and odometer message periodically
-            SendTelltaleControl(canHardware);
-            
-            // Create the error message with node ID and short code
-            char errorMessage[7];
-            
-            // Find the error short code matching the error code
-            const char* shortCode = "ERR";
-            for (size_t i = 0; i < sizeof(ERROR_SHORT_CODES) / sizeof(ERROR_SHORT_CODES[0]); i++) {
-                if (ERROR_SHORT_CODES[i].errorCode == currentError) {
-                    shortCode = ERROR_SHORT_CODES[i].shortCode;
-                    break;
-                }
+        
+        // --- TELLTALE MESSAGES ---
+        // Create telltale message data
+        uint8_t telltaleData[8] = {0};
+        
+        // Set both battery and wrench telltales to blinking for errors
+        telltaleData[0] |= 0x0A; // Battery and wrench both blinking (0x0A = 00001010)
+        telltaleData[4] = 0x33;  // Additional data needed for blinking
+        telltaleData[6] = 0x32;  // Additional data needed for blinking
+        
+        // Send telltale message to CAN bus (standard telltale ID)
+        uint32_t telltaleId = 0x18FECA4C;
+        canHardware->Send(telltaleId, telltaleData, 8);
+        
+        // --- LCD MESSAGES ---
+        // Find the error short code matching the error code
+        const char* shortCode = "ERR";
+        for (size_t i = 0; i < sizeof(ERROR_SHORT_CODES) / sizeof(ERROR_SHORT_CODES[0]); i++) {
+            if (ERROR_SHORT_CODES[i].errorCode == currentError) {
+                shortCode = ERROR_SHORT_CODES[i].shortCode;
+                break;
             }
-            
-            sprintf(errorMessage, "%2d %s", errorNodeId, shortCode);
-            SendOdometerMessage(errorMessage, canHardware);
         }
+        
+        // Create the error message with node ID and short code
+        char errorMessageText[7];
+        sprintf(errorMessageText, "%2d %s", errorNodeId, shortCode);
+        
+        // Set the message in memory
+        SetOdometerMessage(errorMessageText);
+        
+        // Send the message exactly like the boot display does - use 0xF9 source address
+        SendOdometerMessage(nullptr, canHardware, 0xF9, false);
     }
     else if (errorActive) {
         // Error cleared, reset state
         errorActive = false;
+        
+        // Set telltales to OFF state
         SetTelltaleState(TelltaleType::BATTERY, TelltaleState::OFF);
         SetTelltaleState(TelltaleType::WRENCH, TelltaleState::OFF);
-        SendTelltaleControl(canHardware);
+
+        // Turn off telltales
+        uint8_t telltaleData[8] = {0}; // All zeros to turn off telltales
+        uint32_t telltaleId = 0x18FECA4C;
+        canHardware->Send(telltaleId, telltaleData, 8);
         
         // Clear the odometer message (only if no other warnings are active)
         if (!tempWarningActive && !uDeltaWarningActive) {
-            SendOdometerMessage("      ", canHardware);
+            // Set empty message and send with same source address as boot display
+            SetOdometerMessage("      ");
+            SendOdometerMessage(nullptr, canHardware, 0xF9, false);
         }
     }
 }
@@ -1102,21 +1133,24 @@ bool VX1::ReportTemperatureWarning(float temperature, CanHardware* canHardware)
     // Check if VX1 mode is enabled, VX1enCanMsg is set to 1, VX1TempWarn is set to 1, and we have a valid CAN interface
     if (!IsEnabled() || !canHardware || Param::GetInt(Param::VX1enCanMsg) != 1 || Param::GetInt(Param::VX1TempWarn) != 1)
         return false;
-    
-    // Store temperature warning state
+
+    // Update the current temperature warning value
     tempWarningActive = true;
     currentTempWarning = temperature;
     
-    // Set battery telltale to blinking (don't affect wrench if it's already set for another reason)
+    // Set telltale state (doesn't change if already set correctly)
     SetTelltaleState(TelltaleType::BATTERY, TelltaleState::BLINKING);
-    SendTelltaleControl(canHardware);
-    
-    // Format the temperature message
+    SendTelltaleControl(canHardware, false); // Rate limiting is handled in SendTelltaleControl
+        
+    // Create temperature message
     char tempMessage[7];
     sprintf(tempMessage, "t %3d", static_cast<int>(temperature));
     
-    // Send the temperature message to the odometer
-    return SendOdometerMessage(tempMessage, canHardware);
+    // Set the message and send it with the same source address as boot display
+    SetOdometerMessage(tempMessage);
+    SendOdometerMessage(nullptr, canHardware, 0xF9, false);
+    
+    return true;
 }
 
 /**
@@ -1125,20 +1159,82 @@ bool VX1::ReportTemperatureWarning(float temperature, CanHardware* canHardware)
  * @param canHardware Pointer to the CAN hardware interface
  * @param bmsFsm Pointer to the BmsFsm instance
  */
-void VX1::TemperatureWarningTask(CanHardware* canHardware, BmsFsm* bmsFsm)
+void VX1::TemperatureWarningTask(CanHardware* canHardware, BmsFsm* /*unused*/)
 {
-    // Check if VX1 mode is enabled, VX1enCanMsg is set to 1, VX1TempWarn is set to 1, and we have a valid CAN interface
-    if (!IsEnabled() || !canHardware || Param::GetInt(Param::VX1enCanMsg) != 1 || Param::GetInt(Param::VX1TempWarn) != 1)
+    // Check if we have a valid CAN interface
+    if (!canHardware)
         return;
     
-    // Check if test mode is enabled
+    // Check first if test mode is enabled - this takes priority over normal warnings
+    // and we want to run it even if VX1TempWarn is not set to 1
     if (Param::GetInt(Param::VX1TempWarnTest) == 1) {
-        if (!tempWarningActive) {
-            // Simulate a temperature warning
-            ReportTemperatureWarning(99.0f, canHardware);
-        }
-        return;
+        // Basic checks for VX1 mode - these are critical
+        if (!IsEnabled() || Param::GetInt(Param::VX1enCanMsg) != 1)
+            return;
+        
+        // Store temp warning state for cleanup when test is turned off
+        tempWarningActive = true;
+        // Use actual temperature from parameter
+        currentTempWarning = Param::GetFloat(Param::tempmax);
+        
+        // Set battery telltale state to blinking
+        SetTelltaleState(TelltaleType::BATTERY, TelltaleState::BLINKING);
+        
+        // --- TELLTALE MESSAGES ---
+        // Create telltale message data
+        uint8_t telltaleData[8] = {0};
+        
+        // Apply battery state (blinking)
+        telltaleData[0] |= 0x08; // 10 in bits 3-2 for blinking battery light
+        telltaleData[4] = 0x33;  // Additional data needed for blinking
+        telltaleData[6] = 0x32;  // Additional data needed for blinking
+        
+        // Send telltale message to CAN bus (standard telltale ID)
+        uint32_t telltaleId = 0x18FECA4C;
+        canHardware->Send(telltaleId, telltaleData, 8);
+        
+        // --- LCD MESSAGES ---
+        // Format temperature message with actual temperature value
+        char tempMessage[7];
+        sprintf(tempMessage, "t %3d", static_cast<int>(currentTempWarning)); // Use actual temperature
+        
+        // Set the message in memory
+        SetOdometerMessage(tempMessage);
+        
+        // Send the message exactly like the boot display does - use 0xF9 source address
+        SendOdometerMessage(nullptr, canHardware, 0xF9, false);
+        
+        return; // Skip normal temperature warning logic
     }
+    
+    // If we're here, test mode is off - check if regular warnings are enabled
+    if (!IsEnabled() || Param::GetInt(Param::VX1enCanMsg) != 1 || Param::GetInt(Param::VX1TempWarn) != 1)
+        return;
+    
+    // Handle case where test mode was just turned off
+    static bool prevTestMode = false;
+    bool currentTestMode = (Param::GetInt(Param::VX1TempWarnTest) == 1);
+    
+    // Test mode just turned off
+    if (prevTestMode && !currentTestMode) {
+        prevTestMode = false; // Update state
+        
+        // Clear warning state if there's no actual warning
+        if (!tempWarningActive) {
+            // Turn off telltale
+            SetTelltaleState(TelltaleType::BATTERY, TelltaleState::OFF);
+            uint8_t telltaleData[8] = {0};
+            canHardware->Send(0x18FECA4C, telltaleData, 8);
+            
+            // Clear LCD
+            uint8_t clearData[8] = {0};
+            clearData[7] = VX1_OVERRIDE_FORCE;
+            canHardware->Send((3 << 26) | (VX1_ODOMETER_PGN << 8) | 0x80, clearData, 8);
+        }
+    }
+    
+    // Update previous test mode state
+    prevTestMode = currentTestMode;
     
     // Get current temperature
     float tempMax = Param::GetFloat(Param::tempmax);
@@ -1146,18 +1242,24 @@ void VX1::TemperatureWarningTask(CanHardware* canHardware, BmsFsm* bmsFsm)
     
     // If temperature exceeds warning threshold, report it
     if (tempMax >= tempWarnPoint) {
-        // Only report if not already reporting or if temperature has changed significantly
+        // Only refresh the display if the temperature has changed significantly
         if (!tempWarningActive || fabs(tempMax - currentTempWarning) >= 1.0f) {
+            // Update with new temperature value - this handles setting the flag,
+            // updating telltales, and displaying the message
             ReportTemperatureWarning(tempMax, canHardware);
-        }
-        else {
-            // Refresh telltales and odometer message periodically
-            SendTelltaleControl(canHardware);
+        } else {
+            // Keep the warning active by refreshing telltales and message
+            // This is important to prevent telltales from timing out
+            SetTelltaleState(TelltaleType::BATTERY, TelltaleState::BLINKING);
+            SendTelltaleControl(canHardware, false);
             
             // Refresh temperature message
             char tempMessage[7];
             sprintf(tempMessage, "t %3d", static_cast<int>(currentTempWarning));
-            SendOdometerMessage(tempMessage, canHardware);
+            
+            // Set the message and send it with the same source address as boot display
+            SetOdometerMessage(tempMessage);
+            SendOdometerMessage(nullptr, canHardware, 0xF9, false);
         }
     }
     else if (tempWarningActive) {
@@ -1167,12 +1269,13 @@ void VX1::TemperatureWarningTask(CanHardware* canHardware, BmsFsm* bmsFsm)
         // Keep battery telltale blinking only if error is active, otherwise turn it off
         if (!errorActive) {
             SetTelltaleState(TelltaleType::BATTERY, TelltaleState::OFF);
-            SendTelltaleControl(canHardware);
+            SendTelltaleControl(canHardware, false);
         }
         
         // Clear the odometer message (only if no other warnings are active)
         if (!errorActive && !uDeltaWarningActive) {
-            SendOdometerMessage("      ", canHardware);
+            SetOdometerMessage("      ");
+            SendOdometerMessage(nullptr, canHardware, 0xF9, false);
         }
     }
 }
@@ -1196,14 +1299,17 @@ bool VX1::ReportUDeltaWarning(float uDelta, CanHardware* canHardware)
     
     // Set wrench telltale to solid ON (don't affect battery if it's already set for another reason)
     SetTelltaleState(TelltaleType::WRENCH, TelltaleState::ON);
-    SendTelltaleControl(canHardware);
+    SendTelltaleControl(canHardware, false);
     
     // Format the udelta message (same format as in boot screen)
     char uDeltaMessage[7];
     sprintf(uDeltaMessage, "u %3d", static_cast<int>(uDelta));
     
-    // Send the udelta message to the odometer
-    return SendOdometerMessage(uDeltaMessage, canHardware);
+    // Set the message and send it with the same source address as boot display
+    SetOdometerMessage(uDeltaMessage);
+    SendOdometerMessage(nullptr, canHardware, 0xF9, false);
+    
+    return true;
 }
 
 /**
@@ -1212,20 +1318,80 @@ bool VX1::ReportUDeltaWarning(float uDelta, CanHardware* canHardware)
  * @param canHardware Pointer to the CAN hardware interface
  * @param bmsFsm Pointer to the BmsFsm instance
  */
-void VX1::UDeltaWarningTask(CanHardware* canHardware, BmsFsm* bmsFsm)
+void VX1::UDeltaWarningTask(CanHardware* canHardware, BmsFsm* /*unused*/)
 {
-    // Check if VX1 mode is enabled, VX1enCanMsg is set to 1, VX1uDeltaWarn is set to 1, and we have a valid CAN interface
-    if (!IsEnabled() || !canHardware || Param::GetInt(Param::VX1enCanMsg) != 1 || Param::GetInt(Param::VX1uDeltaWarn) != 1)
+    // Check if we have a valid CAN interface
+    if (!canHardware)
         return;
     
-    // Check if test mode is enabled
+    // Check first if test mode is enabled - this takes priority over normal warnings
+    // and we want to run it even if VX1uDeltaWarn is not set to 1
     if (Param::GetInt(Param::VX1uDeltaWarnTest) == 1) {
-        if (!uDeltaWarningActive) {
-            // Simulate a udelta warning
-            ReportUDeltaWarning(250.0f, canHardware);
-        }
-        return;
+        // Basic checks for VX1 mode - these are critical
+        if (!IsEnabled() || Param::GetInt(Param::VX1enCanMsg) != 1)
+            return;
+        
+        // Store udelta warning state for cleanup when test is turned off
+        uDeltaWarningActive = true;
+        // Use actual voltage delta from parameter
+        currentUDeltaWarning = Param::GetFloat(Param::udelta);
+        
+        // Set wrench telltale state to solid ON
+        SetTelltaleState(TelltaleType::WRENCH, TelltaleState::ON);
+        
+        // --- TELLTALE MESSAGES ---
+        // Create telltale message data
+        uint8_t telltaleData[8] = {0};
+        
+        // Apply wrench state (solid ON)
+        telltaleData[0] |= 0x01; // 01 in bits 1-0 for solid ON wrench light
+        
+        // Send telltale message to CAN bus (standard telltale ID)
+        uint32_t telltaleId = 0x18FECA4C;
+        canHardware->Send(telltaleId, telltaleData, 8);
+        
+        // --- LCD MESSAGES ---
+        // Format voltage delta message with actual value
+        char uDeltaMessage[7];
+        sprintf(uDeltaMessage, "u %3d", static_cast<int>(currentUDeltaWarning)); // Use actual udelta
+        
+        // Set the message in memory
+        SetOdometerMessage(uDeltaMessage);
+        
+        // Send the message exactly like the boot display does - use 0xF9 source address
+        SendOdometerMessage(nullptr, canHardware, 0xF9, false);
+        
+        return; // Skip normal voltage delta warning logic
     }
+    
+    // If we're here, test mode is off - check if regular warnings are enabled
+    if (!IsEnabled() || Param::GetInt(Param::VX1enCanMsg) != 1 || Param::GetInt(Param::VX1uDeltaWarn) != 1)
+        return;
+    
+    // Handle case where test mode was just turned off
+    static bool prevTestMode = false;
+    bool currentTestMode = (Param::GetInt(Param::VX1uDeltaWarnTest) == 1);
+    
+    // Test mode just turned off
+    if (prevTestMode && !currentTestMode) {
+        prevTestMode = false; // Update state
+        
+        // Clear warning state if there's no actual warning
+        if (!uDeltaWarningActive) {
+            // Turn off telltale
+            SetTelltaleState(TelltaleType::WRENCH, TelltaleState::OFF);
+            uint8_t telltaleData[8] = {0};
+            canHardware->Send(0x18FECA4C, telltaleData, 8);
+            
+            // Clear LCD
+            uint8_t clearData[8] = {0};
+            clearData[7] = VX1_OVERRIDE_FORCE;
+            canHardware->Send((3 << 26) | (VX1_ODOMETER_PGN << 8) | 0x80, clearData, 8);
+        }
+    }
+    
+    // Update previous test mode state
+    prevTestMode = currentTestMode;
     
     // Get current uDelta
     float uDelta = Param::GetFloat(Param::udelta);
@@ -1233,18 +1399,24 @@ void VX1::UDeltaWarningTask(CanHardware* canHardware, BmsFsm* bmsFsm)
     
     // If uDelta exceeds warning threshold, report it
     if (uDelta >= uDeltaTresh) {
-        // Only report if not already reporting or if uDelta has changed significantly
+        // Only refresh the display if the udelta has changed significantly
         if (!uDeltaWarningActive || fabs(uDelta - currentUDeltaWarning) >= 5.0f) {
+            // Update with new uDelta value - this handles setting the flag,
+            // updating telltales, and displaying the message
             ReportUDeltaWarning(uDelta, canHardware);
-        }
-        else {
-            // Refresh telltales and odometer message periodically
-            SendTelltaleControl(canHardware);
+        } else {
+            // Keep the warning active by refreshing telltales and message
+            // This is important to prevent telltales from timing out
+            SetTelltaleState(TelltaleType::WRENCH, TelltaleState::ON);
+            SendTelltaleControl(canHardware, false);
             
             // Refresh udelta message
             char uDeltaMessage[7];
             sprintf(uDeltaMessage, "u %3d", static_cast<int>(currentUDeltaWarning));
-            SendOdometerMessage(uDeltaMessage, canHardware);
+            
+            // Set the message and send it with the same source address as boot display
+            SetOdometerMessage(uDeltaMessage);
+            SendOdometerMessage(nullptr, canHardware, 0xF9, false);
         }
     }
     else if (uDeltaWarningActive) {
@@ -1254,12 +1426,13 @@ void VX1::UDeltaWarningTask(CanHardware* canHardware, BmsFsm* bmsFsm)
         // Keep wrench telltale on only if error is active, otherwise turn it off
         if (!errorActive) {
             SetTelltaleState(TelltaleType::WRENCH, TelltaleState::OFF);
-            SendTelltaleControl(canHardware);
+            SendTelltaleControl(canHardware, false);
         }
         
         // Clear the odometer message (only if no other warnings are active)
         if (!errorActive && !tempWarningActive) {
-            SendOdometerMessage("      ", canHardware);
+            SetOdometerMessage("      ");
+            SendOdometerMessage(nullptr, canHardware, 0xF9, false);
         }
     }
 }

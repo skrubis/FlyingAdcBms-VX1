@@ -50,9 +50,9 @@
 //Next value Id: 2105
 /*              category     name         unit       min     max     default id */
 #define PARAM_LIST \
-    PARAM_ENTRY(CAT_BMS,     gain,        "mV/dig",  1,      1000,   586,    3   ) \
-    PARAM_ENTRY(CAT_BMS,     correction0, "ppm",     -10000, 10000,  -1250,  14  ) \
-    PARAM_ENTRY(CAT_BMS,     correction1, "ppm",     -10000, 10000,  1500,   15  ) \
+    PARAM_ENTRY(CAT_BMS,     gain,        "mV/dig",  1,      1000,   587,    3   ) \
+    PARAM_ENTRY(CAT_BMS,     correction0, "ppm",     -10000, 10000,  1800,  14  ) \
+    PARAM_ENTRY(CAT_BMS,     correction1, "ppm",     -10000, 10000,  3700,   15  ) \
     PARAM_ENTRY(CAT_BMS,     correction15,"ppm",     -10000, 10000,  1000,   16  ) \
     PARAM_ENTRY(CAT_BMS,     numchan,     "",        1,      16,     12,     4   ) \
     PARAM_ENTRY(CAT_BMS,     balmode,     BALMODE,   0,      3,      0,      5   ) \
@@ -114,7 +114,7 @@
     PARAM_ENTRY(CAT_VX1_CAN,     VX1TempWarnPoint, "°C",     40,     80,     55,     156 ) \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1TempWarnTest, "0=Off, 1=On",     0,      1,      0,      157 ) \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1uDeltaWarn,  "0=Off, 1=On",     0,      1,      1,      158 ) \
-    PARAM_ENTRY(CAT_VX1_CAN,     VX1uDeltaWarnTresh, "mV",     50,     500,    150,    159 ) \
+    PARAM_ENTRY(CAT_VX1_CAN,     VX1uDeltaWarnTresh, "mV",     2,     500,    150,    159 ) \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1uDeltaWarnTest,  "0=Off, 1=On",     0,      1,      0,      160 ) \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1SendConfigMsg, "0=off, 2=regVX1drvCurr, 3=VX1regenMaxU 4=VX1regenMaxI, 5=VX1chrCellNo, 6=VX1chrCellMaxV, 7=VX1chrBattCap",   0,      8 ,      0,      161 ) \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1EmulateBMSmsg, "0=off, 1=onlyPwrReq, 2=all",   0,      2 ,      0,      162 ) \
