@@ -280,6 +280,31 @@ public:
      */
     static void CheckAndInitBootDisplay(CanHardware* canHardware, Stm32Scheduler* scheduler, BmsFsm* bmsFsm);
 
+    /**
+     * @brief Process CAN messages with PGN FEF1h from SA 0x05 (vehicle data)
+     * 
+     * This function extracts speed, voltage, and current data from the message
+     * and updates the corresponding parameters.
+     * 
+     * @param canId CAN ID of the received message
+     * @param data Array containing the message data
+     */
+    static void ProcessVehicleDataMessage(uint32_t canId, uint32_t data[2]);
+    
+    /**
+     * @brief Calculate kWh per 100km based on accumulated energy and distance
+     * 
+     * This function should be called periodically to update the consumption calculation
+     */
+    static void UpdateEnergyConsumption();
+    
+    /**
+     * @brief Register for receiving vehicle data messages
+     * 
+     * @param canHardware Pointer to the CAN hardware interface
+     */
+    static void RegisterVehicleDataMessages(CanHardware* canHardware);
+    
 private:
     // Convert ASCII character to 7-segment display code
     static uint8_t CharToSegment(char ch);
@@ -310,6 +335,18 @@ private:
     // Voltage delta warning states
     static bool uDeltaWarningActive;
     static float currentUDeltaWarning;
+    
+    // Vehicle data from PGN FEF1h
+    static float vehicleSpeed;     // Current speed in km/h
+    static float busVoltage;       // Bus voltage in V
+    static float busCurrent;       // Bus current in A
+    static uint32_t lastVehicleDataTime; // Last time vehicle data was received
+    
+    // Energy consumption calculation variables
+    static float totalEnergyWh;    // Total energy consumed in Wh
+    static float totalDistanceKm;  // Total distance traveled in km
+    static float kWhPer100km;      // Calculated consumption in kWh/100km
+    static uint32_t lastCalculationTime; // Last time consumption was calculated
 };
 
 #endif // VX1_H

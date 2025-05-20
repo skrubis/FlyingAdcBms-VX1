@@ -63,6 +63,18 @@ float VX1::currentTempWarning = 0.0f;
 bool VX1::uDeltaWarningActive = false;
 float VX1::currentUDeltaWarning = 0.0f;
 
+// Vehicle data from PGN FEF1h
+float VX1::vehicleSpeed = 0.0f;     // Current speed in km/h
+float VX1::busVoltage = 0.0f;       // Bus voltage in V
+float VX1::busCurrent = 0.0f;       // Bus current in A
+uint32_t VX1::lastVehicleDataTime = 0; // Last time vehicle data was received
+
+// Energy consumption calculation variables
+float VX1::totalEnergyWh = 0.0f;    // Total energy consumed in Wh
+float VX1::totalDistanceKm = 0.0f;  // Total distance traveled in km
+float VX1::kWhPer100km = 0.0f;      // Calculated consumption in kWh/100km
+uint32_t VX1::lastCalculationTime = 0; // Last time consumption was calculated
+
 // J1939 PGN for VX1 odometer display
 #define VX1_ODOMETER_PGN 0x00FEED
 #define VX1_OVERRIDE_NORMAL 0x55
@@ -73,6 +85,42 @@ float VX1::currentUDeltaWarning = 0.0f;
 
 // J1939 PGN for VX1 clock display
 #define VX1_CLOCK_PGN 0x00FEEC
+
+// J1939 PGN for vehicle data messages
+#define VX1_VEHICLE_DATA_PGN 0x00FEF1
+#define VX1_VEHICLE_DATA_SA 0x05
+#define VX1_VEHICLE_DATA_ID 0x18FEF105
+
+// Custom CAN callback class to handle vehicle data messages
+class VehicleDataCallback : public CanCallback
+{
+public:
+    void HandleRx(uint32_t canId, uint32_t data[2], [[maybe_unused]] uint8_t dlc) override
+    {
+        // Forward the message to the VX1 class for processing
+        // Ignore the dlc parameter as it's not needed
+        VX1::ProcessVehicleDataMessage(canId, data);
+    }
+    
+    void HandleClear() override
+    {
+        // Re-register for vehicle data messages if CAN bus is cleared
+        if (canHardware) {
+            VX1::RegisterVehicleDataMessages(canHardware);
+        }
+    }
+    
+    void SetCanHardware(CanHardware* hw)
+    {
+        canHardware = hw;
+    }
+    
+private:
+    CanHardware* canHardware = nullptr;
+};
+
+// Global instance of the vehicle data callback
+static VehicleDataCallback vehicleDataCallback;
 
 // Boot display sequence states
 enum BootDisplayState {
@@ -104,6 +152,23 @@ void VX1::Initialize()
     displayActive = false;
     memset(odometerMessage, ' ', 6); // Initialize with spaces
     odometerMessage[6] = '\0'; // Null terminator
+    
+    // Initialize vehicle data and energy consumption variables
+    vehicleSpeed = 0.0f;
+    busVoltage = 0.0f;
+    busCurrent = 0.0f;
+    lastVehicleDataTime = 0;
+    
+    totalEnergyWh = 0.0f;
+    totalDistanceKm = 0.0f;
+    kWhPer100km = 0.0f;
+    lastCalculationTime = 0;
+    
+    // Initialize parameter values
+    Param::SetFloat(Param::VX1speed, 0.0f);
+    Param::SetFloat(Param::VX1busVoltage, 0.0f);
+    Param::SetFloat(Param::VX1busCurrent, 0.0f);
+    Param::SetFloat(Param::VX1kWhper100km, 0.0f);
 }
 
 /**
@@ -921,6 +986,27 @@ static void BootDisplayTask()
 void VX1::CheckAndInitBootDisplay(CanHardware* canHardware, Stm32Scheduler* scheduler, BmsFsm* bmsFsm)
 {
     static bool bootDisplayInitialized = false;
+    static bool vehicleDataRegistered = false;
+    
+    // Register for vehicle data messages if not already done
+    // Only register if:
+    // 1. VX1mode = 1 (VX1 mode enabled)
+    // 2. VX1enCanMsg = 1 (CAN messages enabled)
+    // 3. We're on the master node
+    if (!vehicleDataRegistered && canHardware != nullptr && bmsFsm != nullptr &&
+        Param::GetInt(Param::VX1mode) == 1 && 
+        Param::GetInt(Param::VX1enCanMsg) == 1 &&
+        IsMaster(bmsFsm)) // Check if this is the master node
+    {
+        vehicleDataRegistered = true;
+        
+        // Register for vehicle data messages
+        RegisterVehicleDataMessages(canHardware);
+        
+        // Set up the vehicle data callback
+        vehicleDataCallback.SetCanHardware(canHardware);
+        canHardware->AddCallback(&vehicleDataCallback);
+    }
     
     // Initialize boot display screen once, when BMS is running
     if (!bootDisplayInitialized && bmsFsm != nullptr)
@@ -1074,6 +1160,52 @@ void VX1::ClockStatsDisplayTask(CanHardware* canHardware, BmsFsm* bmsFsm)
             }
             break;
         }
+        case 6: // kWh/100km (energy consumption)
+        {
+            float consumption = Param::GetFloat(Param::VX1kWhper100km);
+            
+            // We'll directly set the 7-segment display codes in the data array later
+            // Just store a simple format here for now
+            if (consumption <= 0.0f) {
+                // No consumption data yet or negative value
+                strcpy(displayStr, "--  ");
+            } else if (consumption < 10.0f) {
+                // Less than 10 kWh/100km - show as Wh/100km with 4 digits (up to 9999 Wh/100km)
+                // Convert kWh to Wh (multiply by 1000)
+                int whValue = static_cast<int>(consumption * 1000.0f + 0.5f); // Add 0.5 for proper rounding
+                
+                // Store the raw value for debugging
+                Param::SetFloat(Param::VX1DebugParam1, consumption);       // Original kWh/100km value
+                Param::SetFloat(Param::VX1DebugParam2, whValue);          // Calculated Wh/100km value
+                
+                // Format with up to 4 digits for Wh/100km values
+                if (whValue < 1000) {
+                    // 1-3 digits (e.g., 563 for 0.563 kWh/100km)
+                    sprintf(displayStr, "%d", whValue);
+                } else {
+                    // 4 digits (e.g., 9999 for 9.999 kWh/100km)
+                    // Cap at 9999
+                    if (whValue > 9999) whValue = 9999;
+                    sprintf(displayStr, "%d", whValue);
+                }
+            } else if (consumption < 100.0f) {
+                // Between 10 and 99.9 kWh/100km - show with no decimals
+                sprintf(displayStr, "%.0f", consumption);
+            } else {
+                // Over 100 kWh/100km - cap at 999
+                int value = static_cast<int>(consumption);
+                if (value > 999) value = 999;
+                sprintf(displayStr, "%d", value);
+            }
+            
+            // Special handling for kWh/100km display - we'll handle this separately
+            // Set a flag to indicate special handling
+            if (consumption > 0.0f) {
+                // Add a special marker that we'll detect later
+                strcat(displayStr, "*");
+            }
+            break;
+        }
         default:
             // Default to showing udelta if invalid value
             sprintf(displayStr, "%4d", static_cast<int>(Param::GetFloat(Param::udelta)));
@@ -1083,57 +1215,130 @@ void VX1::ClockStatsDisplayTask(CanHardware* canHardware, BmsFsm* bmsFsm)
     // Prepare the J1939 message for clock display
     uint8_t data[8] = {0};
     
-    // Handle different display formats based on the number of significant digits
-    // First, determine how many significant digits we have
-    int significantDigits = 0;
-    for (int i = 0; i < 4; i++) {
-        if (displayStr[i] != ' ') {
-            significantDigits++;
-        }
+    // Check if this is a kWh/100km display with our special marker
+    bool isKwhDisplay = false;
+    size_t len = strlen(displayStr);
+    if (len > 0 && displayStr[len-1] == '*') {
+        isKwhDisplay = true;
+        // Remove the marker
+        displayStr[len-1] = '\0';
+        len--;
     }
     
-    // Clear all data bytes first
-    for (int i = 0; i < 4; i++) {
-        data[i] = 0x00;
-    }
-    
-    // Handle different cases based on number of significant digits
-    if (significantDigits == 1) {
-        // Single digit - display on the third character from left (byte 1)
-        // Find the single digit in the string
+    // Special handling for kWh/100km display
+    if (isKwhDisplay) {
+        // Clear all data bytes first
         for (int i = 0; i < 4; i++) {
-            if (displayStr[i] != ' ') {
-                data[1] = CharToSegment(displayStr[i]);
-                break;
-            }
-        }
-    } 
-    else if (significantDigits == 2) {
-        // Two digits - center on bytes 1 and 2
-        // Find the two digits in the string and store their positions
-        int digitPositions[2] = {-1, -1};
-        int digitCount = 0;
-        
-        for (int i = 0; i < 4; i++) {
-            if (displayStr[i] != ' ') {
-                digitPositions[digitCount] = i;
-                digitCount++;
-                if (digitCount >= 2) break;
-            }
+            data[i] = 0x00;
         }
         
-        // Place the digits in the correct order (tens digit on byte 2, ones on byte 1)
-        // For example, for "10", the '1' should be on byte 2 and '0' on byte 1
-        data[2] = CharToSegment(displayStr[digitPositions[0]]); // Tens digit
-        data[1] = CharToSegment(displayStr[digitPositions[1]]); // Ones digit
-    }
-    else {
-        // 3 or 4 characters - use normal display order
-        // Byte 0 is rightmost character, byte 3 is leftmost
-        data[0] = CharToSegment(displayStr[3]); // Rightmost
-        data[1] = CharToSegment(displayStr[2]);
-        data[2] = CharToSegment(displayStr[1]);
-        data[3] = CharToSegment(displayStr[0]); // Leftmost
+        // For kWh/100km display, we need to handle up to 4 digits properly
+        // The displayStr should contain a number (e.g., "563" for 0.5625 kWh/100km)
+        
+        // Store the original string for debugging
+        Param::SetFloat(Param::VX1DebugParam1, len);  // String length
+        
+        // Check if this is a "--" display
+        if (displayStr[0] == '-' && displayStr[1] == '-') {
+            // Display "--" for no data
+            data[3] = CharToSegment('-'); // Leftmost
+            data[2] = CharToSegment('-'); // Second from left
+        } else {
+            // Right-align the digits on the display
+            // For a 7-segment display with 4 positions (indexed 3,2,1,0 from left to right)
+            // We want to place the digits starting from the right
+            
+            // Clear all positions first
+            for (int i = 0; i < 4; i++) {
+                data[i] = 0x00;
+            }
+            
+            // Right-align the digits
+            // For a 3-digit number like "563":
+            // Position 3 (leftmost): '5'
+            // Position 2: '6'
+            // Position 1: '3'
+            // Position 0 (rightmost): empty
+            
+            // Handle different string lengths
+            if (len == 1) {
+                // Single digit - place in position 1 (second from right)
+                data[1] = CharToSegment(displayStr[0]);
+            } else if (len == 2) {
+                // Two digits - place in positions 2 and 1
+                data[2] = CharToSegment(displayStr[0]);
+                data[1] = CharToSegment(displayStr[1]);
+            } else if (len == 3) {
+                // Three digits - place in positions 3, 2, and 1
+                data[3] = CharToSegment(displayStr[0]);
+                data[2] = CharToSegment(displayStr[1]);
+                data[1] = CharToSegment(displayStr[2]);
+            } else if (len == 4) {
+                // Four digits - use all positions
+                data[3] = CharToSegment(displayStr[0]);
+                data[2] = CharToSegment(displayStr[1]);
+                data[1] = CharToSegment(displayStr[2]);
+                data[0] = CharToSegment(displayStr[3]);
+            }
+            
+            // Store digits for debugging
+            Param::SetFloat(Param::VX1DebugParam1, len);           // String length
+            Param::SetFloat(Param::VX1DebugParam2, displayStr[0] - '0'); // First digit
+        }
+    } else {
+        // Standard display handling
+        // Handle different display formats based on the number of significant digits
+        // First, determine how many significant digits we have
+        int significantDigits = 0;
+        for (int i = 0; i < 4; i++) {
+            if (displayStr[i] != ' ') {
+                significantDigits++;
+            }
+        }
+        
+        // Clear all data bytes first
+        for (int i = 0; i < 4; i++) {
+            data[i] = 0x00;
+        }
+        
+        // Handle different cases based on number of significant digits
+        if (significantDigits == 1) {
+            // Single digit - display on the third character from left (byte 1)
+            // Find the single digit in the string
+            for (int i = 0; i < 4; i++) {
+                if (displayStr[i] != ' ') {
+                    data[1] = CharToSegment(displayStr[i]);
+                    break;
+                }
+            }
+        } 
+        else if (significantDigits == 2) {
+            // Two digits - center on bytes 1 and 2
+            // Find the two digits in the string and store their positions
+            int digitPositions[2] = {-1, -1};
+            int digitCount = 0;
+            
+            for (int i = 0; i < 4; i++) {
+                if (displayStr[i] != ' ') {
+                    digitPositions[digitCount] = i;
+                    digitCount++;
+                    if (digitCount >= 2) break;
+                }
+            }
+            
+            // Place the digits in the correct order (tens digit on byte 2, ones on byte 1)
+            // For example, for "10", the '1' should be on byte 2 and '0' on byte 1
+            data[2] = CharToSegment(displayStr[digitPositions[0]]); // Tens digit
+            data[1] = CharToSegment(displayStr[digitPositions[1]]); // Ones digit
+        }
+        else {
+            // 3 or 4 characters - use normal display order
+            // Byte 0 is rightmost character, byte 3 is leftmost
+            data[0] = CharToSegment(displayStr[3]); // Rightmost
+            data[1] = CharToSegment(displayStr[2]);
+            data[2] = CharToSegment(displayStr[1]);
+            data[3] = CharToSegment(displayStr[0]); // Leftmost
+        }
     }
     
     data[4] = 0x00; // Empty segment 5
@@ -1713,5 +1918,155 @@ void VX1::UDeltaWarningTask(CanHardware* canHardware, BmsFsm* /*unused*/)
             SetOdometerMessage("      ");
             SendOdometerMessage(nullptr, canHardware, 0xF9, false);
         }
+    }
+}
+
+/**
+ * Process CAN messages with PGN FEF1h from SA 0x05 (vehicle data)
+ * 
+ * This function extracts speed, voltage, and current data from the message
+ * and updates the corresponding parameters.
+ * 
+ * @param canId CAN ID of the received message
+ * @param data Array containing the message data
+ */
+void VX1::ProcessVehicleDataMessage(uint32_t canId, uint32_t data[2])
+{
+    // Only process messages if:
+    // 1. The message has the correct CAN ID
+    // 2. VX1mode = 1 (VX1 mode enabled)
+    // 3. VX1enCanMsg = 1 (CAN messages enabled)
+    if (canId != VX1_VEHICLE_DATA_ID || 
+        Param::GetInt(Param::VX1mode) != 1 || 
+        Param::GetInt(Param::VX1enCanMsg) != 1) {
+        return;
+    }
+    
+    // Get current time for calculations
+    uint32_t currentTime = Param::GetInt(Param::uptime);
+    
+    // Extract data from the message
+    uint8_t* bytes = (uint8_t*)data;
+    
+    // Extract speed from bytes 1 and 2 (LSB and MSB)
+    uint16_t speed_raw = (bytes[2] << 8) | bytes[1];
+    float speed_kmh = speed_raw / 256.0f;
+    
+    // Extract bus voltage from byte 6 (1 V per bit)
+    float voltage = bytes[6] * 1.0f;
+    
+    // Extract bus current from byte 7 (0.488 A per bit)
+    float current = bytes[7] * 0.488f;
+    
+    // Update stored values
+    vehicleSpeed = speed_kmh;
+    busVoltage = voltage;
+    busCurrent = current;
+    
+    // Update parameter values for display
+    Param::SetFloat(Param::VX1speed, vehicleSpeed);
+    Param::SetFloat(Param::VX1busVoltage, busVoltage);
+    Param::SetFloat(Param::VX1busCurrent, busCurrent);
+    
+    // Calculate power and update energy consumption
+    float power_W = voltage * current;
+    
+    // Only update energy and distance if we have previous data
+    if (lastVehicleDataTime > 0) {
+        // Calculate time difference in seconds
+        float dt_seconds = (currentTime - lastVehicleDataTime) / 1000.0f;
+        
+        // If time difference is 0, use a fixed time step based on message interval
+        // This ensures we accumulate distance even if the system time resolution is low
+        if (dt_seconds <= 0) {
+            dt_seconds = 0.1f; // Assume 100ms between messages
+        }
+        
+        // Calculate energy consumed in this interval (Wh)
+        float energy_Wh = power_W * dt_seconds / 3600.0f;
+        
+        // Calculate distance traveled in this interval (km)
+        float distance_km = speed_kmh * dt_seconds / 3600.0f;
+        
+        // Debug: Store intermediate values to spot parameters
+        Param::SetFloat(Param::VX1DebugParam1, power_W);       // Store power in W
+        Param::SetFloat(Param::VX1DebugParam2, dt_seconds);    // Store time difference in seconds
+        
+        // Only accumulate if values are reasonable (positive power, non-zero speed)
+        if (power_W > 0 && speed_kmh > 1.0f) {
+            totalEnergyWh += energy_Wh;
+            totalDistanceKm += distance_km;
+            
+            // Debug: Show accumulated values
+            Param::SetFloat(Param::VX1DebugParam1, totalEnergyWh);    // Total energy in Wh
+            Param::SetFloat(Param::VX1DebugParam2, totalDistanceKm);  // Total distance in km
+        } else {
+            // Debug: Set special values to indicate why we're not accumulating
+            if (power_W <= 0) {
+                Param::SetFloat(Param::VX1DebugParam1, -999.0f);  // Negative power
+            }
+            if (speed_kmh <= 1.0f) {
+                Param::SetFloat(Param::VX1DebugParam2, -999.0f);  // Too low speed
+            }
+        }
+    }
+    
+    // Update last data time
+    lastVehicleDataTime = currentTime;
+    
+    // Call UpdateEnergyConsumption after every 10 messages
+    static uint8_t messageCounter = 0;
+    messageCounter++;
+    
+    // Calculate consumption if enough time has passed or every 10 messages
+    if (currentTime - lastCalculationTime > 1000 || messageCounter >= 10) { // Update every second or every 10 messages
+        UpdateEnergyConsumption();
+        lastCalculationTime = currentTime;
+        messageCounter = 0;
+    }
+}
+
+/**
+ * Calculate kWh per 100km based on accumulated energy and distance
+ * 
+ * This function should be called periodically to update the consumption calculation
+ */
+void VX1::UpdateEnergyConsumption()
+{
+    // Debug: Store current values to spot parameters for debugging
+    Param::SetFloat(Param::VX1DebugParam1, totalEnergyWh);    // Store total energy in Wh
+    Param::SetFloat(Param::VX1DebugParam2, totalDistanceKm);  // Store total distance in km
+    
+    // Only calculate if we have accumulated some distance
+    if (totalDistanceKm > 0.001f) { // At least 1 meter
+        // Calculate kWh per 100km
+        kWhPer100km = (totalEnergyWh / totalDistanceKm) * 100.0f / 1000.0f;
+        
+        // Update parameter value for display
+        Param::SetFloat(Param::VX1kWhper100km, kWhPer100km);
+        
+        // Reset accumulators after a significant distance to keep calculation current
+        // Use the configurable reset distance parameter
+        float resetDistance = Param::GetFloat(Param::VX1kWhResetDist);
+        if (totalDistanceKm > resetDistance) { // Reset after configured distance
+            totalEnergyWh = 0.0f;
+            totalDistanceKm = 0.0f;
+        }
+    } else {
+        // Debug: If we're not calculating, set kWh/100km to a special value to indicate why
+        Param::SetFloat(Param::VX1kWhper100km, -1.0f); // -1 indicates not enough distance accumulated
+    }
+}
+
+/**
+ * Register for receiving vehicle data messages
+ * 
+ * @param canHardware Pointer to the CAN hardware interface
+ */
+void VX1::RegisterVehicleDataMessages(CanHardware* canHardware)
+{
+    if (canHardware) {
+        // Register to receive vehicle data messages
+        canHardware->RegisterUserMessage(VX1_VEHICLE_DATA_ID);
     }
 }

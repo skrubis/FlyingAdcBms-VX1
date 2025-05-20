@@ -108,7 +108,7 @@
     PARAM_ENTRY(CAT_VX1_CAN,     VX1msgInterval, "ms",     50,      1000,      100,      150 ) \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1paramMsgCount, "times",     1,      10,     2,      151 ) \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1LCDClockStats, "0=Off, 1=Always, 2=Idle",     0,      2,      1,      152 ) \
-    PARAM_ENTRY(CAT_VX1_CAN,     VX1LCDClockStatVal, "0=soc, 1=uavg, 2=udelta, 3=tempmax, 4=power, 5=idcavg",     0,      5,      2,      153 ) \
+    PARAM_ENTRY(CAT_VX1_CAN,     VX1LCDClockStatVal, "0=soc, 1=uavg, 2=udelta, 3=tempmax, 4=power, 5=idcavg, 6=kWhper100km",     0,      6,      2,      153 ) \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1ErrWarn,  "0=Off, 1=On",     0,      1,      1,      154 ) \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1TempWarn,  "0=Off, 1=On",     0,      1,      1,      155 ) \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1TempWarnPoint, "°C",     40,     80,     55,     156 ) \
@@ -118,6 +118,7 @@
     PARAM_ENTRY(CAT_VX1_CAN,     VX1uDeltaWarnTest,  "0=Off, 1=On",     0,      1,      0,      160 ) \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1SendConfigMsg, "0=off, 2=regVX1drvCurr, 3=VX1regenMaxU 4=VX1regenMaxI, 5=VX1chrCellNo, 6=VX1chrCellMaxV, 7=VX1chrBattCap",   0,      8 ,      0,      161 ) \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1EmulateBMSmsg, "0=off, 1=onlyPwrReq, 2=all",   0,      2 ,      0,      162 ) \
+    PARAM_ENTRY(CAT_VX1_CAN,     VX1kWhResetDist, "km",   0.1,    20,      5,      163 ) \
     VALUE_ENTRY(version,     VERSTR, 2001 ) \
     VALUE_ENTRY(hwrev,       HWREVS, 2104 ) \
     VALUE_ENTRY(opmode,      OPMODES,2000 ) \
@@ -216,7 +217,13 @@
     VALUE_ENTRY(u13cmd,      BAL,    2035 ) \
     VALUE_ENTRY(u14cmd,      BAL,    2036 ) \
     VALUE_ENTRY(u15cmd,      BAL,    2037 ) \
-    VALUE_ENTRY(cpuload,     "%",    2038 )
+    VALUE_ENTRY(cpuload,     "%",    2038 ) \
+    VALUE_ENTRY(VX1speed,    "km/h", 2105 ) \
+    VALUE_ENTRY(VX1busVoltage, "V", 2106 ) \
+    VALUE_ENTRY(VX1busCurrent, "A", 2107 ) \
+    VALUE_ENTRY(VX1kWhper100km, "kWh/100km", 2108 ) \
+    VALUE_ENTRY(VX1DebugParam1, "Wh", 2109 ) \
+    VALUE_ENTRY(VX1DebugParam2, "km", 2110 )
 
 
 /***** Enum String definitions *****/
