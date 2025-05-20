@@ -1,7 +1,7 @@
 /*
  * This file is part of the FlyingAdcBms-VX1 project.
  *
- * Copyright (C) 2025 FlyingAdcBms Team
+ * Copyright (C) 2025 SKRUBIS (https://github.com/skrubis)
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -16,6 +16,21 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
+//  This project is provided as-is, without any express or implied warranties, including but not limited to warranties of merchantability, fitness for a particular purpose, or non-infringement.
+//  All CAN bus messages and PGNs referenced or used in this project are either:
+//  Defined in the public SAE J1939 standard,
+//  Commonly available through public forums, technical documentation, and community research, or
+//  Independently observed through legal means without bypassing any security mechanisms or protections.
+//  No proprietary firmware, OEM software, or copyrighted code has been copied, reverse-engineered, or distributed.
+//  This project is intended solely for educational, research, and interoperability purposes. It is not certified for use in production vehicles or safety-critical systems.
+//  Use of this project is entirely at your own risk. Interfacing with vehicle systems—especially those involving power electronics or battery management—can result in:
+//  Vehicle malfunction or damage
+//  Battery failure or fire
+//  Injury or death
+//  Voiding of warranties or violation of local laws
+//  By using or modifying this project, you accept full responsibility for any consequences that arise. The authors shall not be held liable for any direct, indirect, incidental, special, or consequential damages resulting from the use, misuse, or inability to use this project or any derivative works.
+//  If you believe that any content herein infringes upon your legal rights or intellectual property, please contact the authors with specific details. We are committed to addressing any valid concerns in a respectful and timely manner.
+
 
 #ifndef VX1_H
 #define VX1_H
