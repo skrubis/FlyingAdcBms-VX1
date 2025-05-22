@@ -348,9 +348,10 @@ public:
      * Maps cell voltage parameters to CAN message fields according to specification.
      * 
      * @param canHardware Pointer to the CAN hardware interface
+     * @param moduleNumber Battery module number (0-15) to include in the message
      * @return true if message was sent successfully
      */
-    static bool SendBmsPgn0xFEF3(CanHardware* canHardware);
+    static bool SendBmsPgn0xFEF3(CanHardware* canHardware, uint8_t moduleNumber = 0);
     
     /**
      * @brief Send Faults, Status Flags, and Maintenance Codes PGN (0xFEF4)

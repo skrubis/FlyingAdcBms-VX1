@@ -216,7 +216,7 @@ CanHardware::baudrates VX1::GetCanBaudRate()
  * Check if this node is the master node
  * 
  * @param bmsFsm Pointer to the BmsFsm instance
- * @return true if this is the master node (first node with ID 10 by default)
+ * @return true if this is the master node (first node or node with ID 0)
  */
 bool VX1::IsMaster(BmsFsm* bmsFsmInstance)
 {
@@ -226,8 +226,9 @@ bool VX1::IsMaster(BmsFsm* bmsFsmInstance)
         return bmsFsmInstance->IsFirst();
     }
     
-    // Fallback: check if module address is 10 (default master node ID)
-    return Param::GetInt(Param::modaddr) == 10;
+    // Fallback: check if module address is 0 (master node ID) or 10 (alternative master ID)
+    int modaddr = Param::GetInt(Param::modaddr);
+    return modaddr == 0 || modaddr == 10;
 }
 
 /**
@@ -2096,7 +2097,11 @@ void VX1::RegisterVehicleDataMessages(CanHardware* canHardware)
  * Send BMS PGN messages if conditions are met
  * 
  * Sends BMS PGN messages according to bms-comms.md specification
- * Only sends if VX1mode=1, VX1enCanMsg=1, VX1EmulateBMSmsg=1, and node is master
+ * Only sends if VX1mode=1, VX1enCanMsg=1, VX1EmulateBMSmsg=1
+ * Different behavior based on node ID:
+ * - Node 10 (master): Sends all PGNs + PGN 0xFEF3 with module numbers 0 and 1
+ * - Node 11: Sends only PGN 0xFEF3 with module number 2
+ * - Node 12: Sends only PGN 0xFEF3 with module number 3
  * 
  * @param canHardware Pointer to the CAN hardware interface
  * @param bmsFsm Pointer to the BmsFsm instance
@@ -2107,23 +2112,43 @@ void VX1::BmsPgnEmulationTask(CanHardware* canHardware, BmsFsm* bmsFsm)
     if (!canHardware)
         return;
     
-    // Check if all required conditions are met:
+    // Check if basic conditions are met for all nodes:
     // 1. VX1 mode is enabled (VX1mode = 1)
     // 2. CAN messages are enabled (VX1enCanMsg = 1)
     // 3. BMS message emulation is enabled (VX1EmulateBMSmsg = 1)
-    // 4. This is the master node
     if (!IsEnabled() || 
         Param::GetInt(Param::VX1enCanMsg) != 1 || 
-        Param::GetInt(Param::VX1EmulateBMSmsg) != 1 || 
-        !IsMaster(bmsFsm))
+        Param::GetInt(Param::VX1EmulateBMSmsg) != 1)
     {
         return;
     }
     
-    // Send each BMS PGN in sequence
-    SendBmsPgn0xFEF2(canHardware); // BMS Status & Control
-    SendBmsPgn0xFEF3(canHardware); // Cell Voltage and Temperature Extremes
-    SendBmsPgn0xFEF4(canHardware); // Faults, Status Flags, and Maintenance Codes
+    // Check if this is the master node using the IsMaster function
+    bool isMasterNode = IsMaster(bmsFsm);
+    
+    // Get the node ID
+    int nodeId = Param::GetInt(Param::modaddr);
+    
+    // Different behavior based on node role and ID
+    if (isMasterNode) { // Master node (could be nodeId 0 or 10)
+        // Send main BMS PGNs
+        SendBmsPgn0xFEF2(canHardware); // BMS Status & Control
+        SendBmsPgn0xFEF4(canHardware); // Faults, Status Flags, and Maintenance Codes
+        
+        // Send PGN 0xFEF3 with module number 0
+        SendBmsPgn0xFEF3(canHardware, 0);
+        
+        // Send PGN 0xFEF3 with module number 1
+        SendBmsPgn0xFEF3(canHardware, 1);
+    }
+    else if (nodeId == 11) { // Slave node 11
+        // Send only PGN 0xFEF3 with module number 2
+        SendBmsPgn0xFEF3(canHardware, 2);
+    }
+    else if (nodeId == 12) { // Slave node 12
+        // Send only PGN 0xFEF3 with module number 3
+        SendBmsPgn0xFEF3(canHardware, 3);
+    }
 }
 
 /**
@@ -2233,9 +2258,10 @@ bool VX1::SendBmsPgn0xFEF2(CanHardware* canHardware)
  * Updated format includes 12-bit voltage values and thermal switch status.
  * 
  * @param canHardware Pointer to the CAN hardware interface
+ * @param moduleNumber Battery module number (0-15) to include in the message
  * @return true if message was sent successfully
  */
-bool VX1::SendBmsPgn0xFEF3(CanHardware* canHardware)
+bool VX1::SendBmsPgn0xFEF3(CanHardware* canHardware, uint8_t moduleNumber)
 {
     // Create the data array for the message
     uint8_t data[8] = {0};
@@ -2294,8 +2320,9 @@ bool VX1::SendBmsPgn0xFEF3(CanHardware* canHardware)
     data[6] = ((1 & 0x0F) << 4) | ((lowVoltage >> 8) & 0x0F); // Cell number 1, high 4 bits of voltage
     
     // Byte 7: Battery Module Number (bits 7-4) and Thermal Switch (bits 3-0)
-    uint8_t moduleNumber = Param::GetInt(Param::VX1ModuleNumber); // Get configured module number
-    if (moduleNumber > 15) moduleNumber = 15; // Limit to 4 bits (0-15)
+    // Use the provided moduleNumber parameter (already limited to 0-15 in function declaration)
+    if (moduleNumber > 15) moduleNumber = 15; // Ensure it's limited to 4 bits (0-15)
+    
     uint8_t thermalSwitch = 0x3; // Default: Normal (0x3)
     
     // Check if temperature is above warning threshold
