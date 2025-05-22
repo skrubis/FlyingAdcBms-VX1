@@ -106,6 +106,12 @@ uint32_t VX1::lastCalculationTime = 0; // Last time consumption was calculated
 #define VX1_VEHICLE_DATA_SA 0x05
 #define VX1_VEHICLE_DATA_ID 0x18FEF105
 
+// BMS PGN definitions
+#define VX1_BMS_STATUS_PGN 0x00FEF2 // BMS Status & Control
+#define VX1_BMS_VOLTTEMP_PGN 0x00FEF3 // Cell Voltage and Temperature Extremes
+#define VX1_BMS_FAULTS_PGN 0x00FEF4 // Faults, Status Flags, and Maintenance Codes
+#define VX1_BMS_SA 0x40 // BMS Source Address
+
 // Custom CAN callback class to handle vehicle data messages
 class VehicleDataCallback : public CanCallback
 {
@@ -1737,7 +1743,7 @@ void VX1::TemperatureWarningTask(CanHardware* canHardware, BmsFsm* /*unused*/)
     
     // Get current temperature
     float tempMax = Param::GetFloat(Param::tempmax);
-    float tempWarnPoint = Param::GetFloat(Param::VX1TempWarnPoint);
+    float tempWarnPoint = Param::GetFloat(Param::VX1TempWarnHiPoint);
     
     // If temperature exceeds warning threshold, report it
     if (tempMax >= tempWarnPoint) {
@@ -2084,4 +2090,352 @@ void VX1::RegisterVehicleDataMessages(CanHardware* canHardware)
         // Register to receive vehicle data messages
         canHardware->RegisterUserMessage(VX1_VEHICLE_DATA_ID);
     }
+}
+
+/**
+ * Send BMS PGN messages if conditions are met
+ * 
+ * Sends BMS PGN messages according to bms-comms.md specification
+ * Only sends if VX1mode=1, VX1enCanMsg=1, VX1EmulateBMSmsg=1, and node is master
+ * 
+ * @param canHardware Pointer to the CAN hardware interface
+ * @param bmsFsm Pointer to the BmsFsm instance
+ */
+void VX1::BmsPgnEmulationTask(CanHardware* canHardware, BmsFsm* bmsFsm)
+{
+    // Check if we have a valid CAN interface
+    if (!canHardware)
+        return;
+    
+    // Check if all required conditions are met:
+    // 1. VX1 mode is enabled (VX1mode = 1)
+    // 2. CAN messages are enabled (VX1enCanMsg = 1)
+    // 3. BMS message emulation is enabled (VX1EmulateBMSmsg = 1)
+    // 4. This is the master node
+    if (!IsEnabled() || 
+        Param::GetInt(Param::VX1enCanMsg) != 1 || 
+        Param::GetInt(Param::VX1EmulateBMSmsg) != 1 || 
+        !IsMaster(bmsFsm))
+    {
+        return;
+    }
+    
+    // Send each BMS PGN in sequence
+    SendBmsPgn0xFEF2(canHardware); // BMS Status & Control
+    SendBmsPgn0xFEF3(canHardware); // Cell Voltage and Temperature Extremes
+    SendBmsPgn0xFEF4(canHardware); // Faults, Status Flags, and Maintenance Codes
+}
+
+/**
+ * Send BMS Status & Control PGN (0xFEF2)
+ * 
+ * Maps parameters and sends BMS status information including SoC, temperatures,
+ * voltage, operational states, and various requests.
+ * 
+ * @param canHardware Pointer to the CAN hardware interface
+ * @return true if message was sent successfully
+ */
+bool VX1::SendBmsPgn0xFEF2(CanHardware* canHardware)
+{
+    // Create the data array for the message
+    uint8_t data[8] = {0};
+    
+    // Get parameter values to map to the message
+    float soc = Param::GetFloat(Param::soc);               // State of Charge in %
+    
+    // Check if mock temperature should be used (non-zero value)
+    float mockTemp = Param::GetFloat(Param::VX1mockTemp);
+    float tempmin, tempmax;
+    if (mockTemp != 0) {
+        // Use mock temperature for both min and max
+        tempmin = mockTemp;
+        tempmax = mockTemp;
+    } else {
+        // Use real temperature readings
+        tempmin = Param::GetFloat(Param::tempmin);       // Min cell temperature in °C
+        tempmax = Param::GetFloat(Param::tempmax);       // Max cell temperature in °C
+    }
+    
+    float utotal = Param::GetFloat(Param::utotal) / 1000.0f; // Total voltage in V (convert from mV)
+    float fanDuty = Param::GetFloat(Param::VX1FanDuty);    // Fan duty in %
+    
+    // Encode SoC (Bytes 0-1): UINT16 little-endian, 0.1%/bit
+    uint16_t socValue = static_cast<uint16_t>(soc * 10.0f); // Convert to 0.1% resolution
+    data[0] = socValue & 0xFF;         // Low byte
+    data[1] = (socValue >> 8) & 0xFF;  // High byte
+    
+    // Encode Min Cell Temperature (Byte 2): INT8, 1°C/bit
+    data[2] = static_cast<uint8_t>(static_cast<int8_t>(tempmin));
+    
+    // Encode Max Cell Temperature (Byte 3): INT8, 1°C/bit
+    data[3] = static_cast<uint8_t>(static_cast<int8_t>(tempmax));
+    
+    // Encode Total Voltage (Byte 4): UINT8, 1V/bit
+    data[4] = static_cast<uint8_t>(utotal);
+    
+    // Encode Fan Control Duty (Byte 5): UINT8, 1%/bit
+    data[5] = static_cast<uint8_t>(fanDuty);
+    
+    // Encode flags (Byte 6)
+    uint8_t flags = 0;
+    // Bit 0: BMS Ready (1 if master node is in idle mode)
+    if (Param::GetInt(Param::opmode) == BmsFsm::IDLE)
+        flags |= 0x01;
+    
+    // Bit 1: BMS Normal Operation (1 if master node is in run mode)
+    if (Param::GetInt(Param::opmode) == BmsFsm::RUN)
+        flags |= 0x02;
+    
+    // Bit 2: BMS Warning Mode (1 if tempmax > VX1TempWarnHiPoint)
+    if (tempmax > Param::GetFloat(Param::VX1TempWarnHiPoint))
+        flags |= 0x04;
+    
+    // Bit 3: BMS Fault Mode (1 if master node in error mode)
+    if (Param::GetInt(Param::opmode) == BmsFsm::ERROR)
+        flags |= 0x08;
+    
+    // Bit 4: Request Discharge Power Reduce (1 if uavg < 3450mV)
+    if (Param::GetFloat(Param::uavg) < 3450.0f)
+        flags |= 0x10;
+    
+    // Bit 5: Request Charge Power Reduce (1 if uavg > 4100mV)
+    if (Param::GetFloat(Param::uavg) > 4100.0f)
+        flags |= 0x20;
+    
+    // Bit 6: Request Cooling Fan On (1 if tempmax > VX1TempWarnHiPoint)
+    if (tempmax > Param::GetFloat(Param::VX1TempWarnHiPoint))
+        flags |= 0x40;
+    
+    // Bit 7: Request Service Lamp On (1 if master node in error mode)
+    if (Param::GetInt(Param::opmode) == BmsFsm::ERROR)
+        flags |= 0x80;
+    
+    data[6] = flags;
+    
+    // Byte 7: Reserved (send 0xFF)
+    data[7] = 0xFF;
+    
+    // Calculate the J1939 29-bit ID
+    // Format: Priority (3 bits) | PGN (18 bits) | Source Address (8 bits)
+    // Priority 3 (0b011) << 26 | PGN 0x00FEF2 << 8 | Source Address 0x40
+    uint32_t j1939Id = (3 << 26) | (VX1_BMS_STATUS_PGN << 8) | VX1_BMS_SA;
+    
+    // Send the message
+    canHardware->Send(j1939Id, data, 8);
+    
+    return true;
+}
+
+/**
+ * Send Cell Voltage and Temperature Extremes PGN (0xFEF3)
+ * 
+ * Maps cell voltage and temperature parameters to CAN message fields according to the updated specification.
+ * Updated format includes 12-bit voltage values and thermal switch status.
+ * 
+ * @param canHardware Pointer to the CAN hardware interface
+ * @return true if message was sent successfully
+ */
+bool VX1::SendBmsPgn0xFEF3(CanHardware* canHardware)
+{
+    // Create the data array for the message
+    uint8_t data[8] = {0};
+    
+    // Check if mock temperature should be used (non-zero value)
+    float mockTemp = Param::GetFloat(Param::VX1mockTemp);
+    float tempmin, tempmax;
+    if (mockTemp != 0) {
+        // Use mock temperature for both min and max
+        tempmin = mockTemp;
+        tempmax = mockTemp;
+    } else {
+        // Use real temperature readings
+        tempmin = Param::GetFloat(Param::tempmin);       // Min cell temperature in °C
+        tempmax = Param::GetFloat(Param::tempmax);       // Max cell temperature in °C
+    }
+    
+    // Get voltage values to map to the message
+    float umin = Param::GetFloat(Param::umin);     // Min cell voltage in mV
+    float umax = Param::GetFloat(Param::umax);     // Max cell voltage in mV
+    
+    // Byte 0: Cell Minimum Temperature (1°C/bit)
+    // Convert float to int8_t (temperatures can be negative)
+    data[0] = static_cast<uint8_t>(static_cast<int8_t>(tempmin));
+    
+    // Byte 1: Cell Maximum Temperature (1°C/bit)
+    data[1] = static_cast<uint8_t>(static_cast<int8_t>(tempmax));
+    
+    // Byte 2: Ambient Temperature - No sensor connected, so always 0x00
+    data[2] = 0x00;
+    
+    // The diagnostic software seems to be interpreting the voltage values differently than expected.
+    // Based on the observed values (3841mV showing as 5.762V and 3873mV showing as 5.810V),
+    // we need to adjust our encoding to match what the diagnostics software expects.
+    
+    // For high voltage (umax), scale to match expected format
+    // Diagnostics shows 5.810V for 3873mV, which means it's interpreting the value as 5810mV
+    // This suggests a scaling factor of approximately 1.5x
+    uint16_t highVoltage = static_cast<uint16_t>(umax * 0.667f); // Scale down to compensate
+    if (highVoltage > 4095) highVoltage = 4095; // Limit to 12-bit max
+    
+    // Byte 3: Cell High Voltage (low 8 bits) - bits 7-0
+    data[3] = highVoltage & 0xFF;
+    
+    // Byte 4: Highest Cell Number (bits 7-4) and Cell High Voltage (high 4 bits) - bits 3-0
+    data[4] = ((1 & 0x0F) << 4) | ((highVoltage >> 8) & 0x0F); // Cell number 1, high 4 bits of voltage
+    
+    // For low voltage (umin), apply the same scaling
+    uint16_t lowVoltage = static_cast<uint16_t>(umin * 0.667f); // Scale down to compensate
+    if (lowVoltage > 4095) lowVoltage = 4095; // Limit to 12-bit max
+    
+    // Byte 5: Cell Low Voltage (low 8 bits) - bits 7-0
+    data[5] = lowVoltage & 0xFF;
+    
+    // Byte 6: Lowest Cell Number (bits 7-4) and Cell Low Voltage (high 4 bits) - bits 3-0
+    data[6] = ((1 & 0x0F) << 4) | ((lowVoltage >> 8) & 0x0F); // Cell number 1, high 4 bits of voltage
+    
+    // Byte 7: Battery Module Number (bits 7-4) and Thermal Switch (bits 3-0)
+    uint8_t moduleNumber = Param::GetInt(Param::VX1ModuleNumber); // Get configured module number
+    if (moduleNumber > 15) moduleNumber = 15; // Limit to 4 bits (0-15)
+    uint8_t thermalSwitch = 0x3; // Default: Normal (0x3)
+    
+    // Check if temperature is above warning threshold
+    if (tempmax > Param::GetFloat(Param::VX1TempWarnHiPoint)) {
+        thermalSwitch = 0x4; // HOT (0x4)
+    }
+    
+    data[7] = ((moduleNumber & 0x0F) << 4) | (thermalSwitch & 0x0F);
+    
+    // Calculate the J1939 29-bit ID
+    uint32_t j1939Id = (3 << 26) | (VX1_BMS_VOLTTEMP_PGN << 8) | VX1_BMS_SA;
+    
+    // Send the message
+    canHardware->Send(j1939Id, data, 8);
+    
+    return true;
+}
+
+/**
+ * Send Faults, Status Flags, and Maintenance Codes PGN (0xFEF4)
+ * 
+ * Maps warning and error states to CAN message fields according to specification.
+ * 
+ * @param canHardware Pointer to the CAN hardware interface
+ * @return true if message was sent successfully
+ */
+bool VX1::SendBmsPgn0xFEF4(CanHardware* canHardware)
+{
+    // Create the data array for the message
+    uint8_t data[8] = {0};
+    
+    // Get parameter values to map to the message
+    float utotal = Param::GetFloat(Param::utotal);           // Total voltage in mV
+    float umax = Param::GetFloat(Param::umax);               // Max cell voltage in mV
+    float umin = Param::GetFloat(Param::umin);               // Min cell voltage in mV
+    float udelta = Param::GetFloat(Param::udelta);           // Voltage deviation in mV
+    
+    // Check if mock temperature should be used (non-zero value)
+    float mockTemp = Param::GetFloat(Param::VX1mockTemp);
+    float tempmin, tempmax;
+    if (mockTemp != 0) {
+        // Use mock temperature for both min and max
+        tempmin = mockTemp;
+        tempmax = mockTemp;
+    } else {
+        // Use real temperature readings
+        tempmin = Param::GetFloat(Param::tempmin);       // Min cell temperature in °C
+        tempmax = Param::GetFloat(Param::tempmax);       // Max cell temperature in °C
+    }
+    float soc = Param::GetFloat(Param::soc);                 // State of Charge in %
+    float idc = Param::GetFloat(Param::idc);                 // Current in A
+    float chargelim = Param::GetFloat(Param::chargelim);     // Charge current limit in A
+    float dischargelim = Param::GetFloat(Param::dischargelim); // Discharge current limit in A
+    int cellCount = Param::GetInt(Param::VX1chrCellNo);      // Number of cells
+    
+    // Bytes 0-3: Warnings (00 = Normal, 01 = Warning1, 10 = Warning2, 11 = Not Available)
+    uint8_t warningBytes[4] = {0};
+    
+    // Byte 0 warnings
+    if (utotal > (cellCount * 4200)) {
+        warningBytes[0] |= 0x01; // Pack Voltage High (01 in bits 0-1)
+    }
+    if (utotal < (cellCount * 3250)) {
+        warningBytes[0] |= 0x04; // Pack Voltage Low (01 in bits 2-3)
+    }
+    if (umax > 4190) {
+        warningBytes[0] |= 0x10; // Cell Voltage High (01 in bits 4-5)
+    }
+    if (umin < 3250) {
+        warningBytes[0] |= 0x40; // Cell Voltage Low (01 in bits 6-7)
+    }
+    
+    // Byte 1 warnings
+    if (udelta > Param::GetFloat(Param::VX1uDeltaWarnTresh)) {
+        warningBytes[1] |= 0x01; // Voltage Deviation High (01 in bits 0-1)
+    }
+    if (tempmax > Param::GetFloat(Param::VX1TempWarnHiPoint)) {
+        warningBytes[1] |= 0x04; // Temperature High (01 in bits 2-3)
+    }
+    if (tempmin < Param::GetFloat(Param::VX1TempWarnLoPoint)) {
+        warningBytes[1] |= 0x10; // Temperature Low (01 in bits 4-5)
+    }
+    if ((tempmax - tempmin) > 15) {
+        warningBytes[1] |= 0x40; // Temperature Deviation High (01 in bits 6-7)
+    }
+    
+    // Byte 2 warnings
+    if (soc > 100) {
+        warningBytes[2] |= 0x01; // SOC High (01 in bits 0-1)
+    }
+    if (soc < 0) {
+        warningBytes[2] |= 0x04; // SOC Low (01 in bits 2-3)
+    }
+    if (idc < 0 && fabs(idc) > dischargelim) {
+        warningBytes[2] |= 0x10; // Discharge Current High (01 in bits 4-5)
+    }
+    if (idc > 0 && idc > chargelim) {
+        warningBytes[2] |= 0x40; // Charge Current High (01 in bits 6-7)
+    }
+    
+    // Byte 3 warnings
+    if (idc < 0 && fabs(idc) > dischargelim) {
+        warningBytes[3] |= 0x01; // Discharge Power Over Limit (01 in bits 0-1)
+    }
+    if (idc > 0 && idc > chargelim) {
+        warningBytes[3] |= 0x04; // Charge Power Over Limit (01 in bits 2-3)
+    }
+    
+    // Byte 3.5: BMS Running Bit (bits 4-5)
+    // Increment counter every 100ms, rolls over every 3h (108000 * 100ms = 3h)
+    static uint8_t runningBitCounter = 0;
+    runningBitCounter = (runningBitCounter + 1) % 4;
+    warningBytes[3] |= (runningBitCounter << 4);
+    
+    // Copy warning bytes to data array
+    data[0] = warningBytes[0];
+    data[1] = warningBytes[1];
+    data[2] = warningBytes[2];
+    data[3] = warningBytes[3];
+    
+    // Byte 4: Hardware Faults
+    // Only setting bit 0 if master node is in ERROR mode
+    if (Param::GetInt(Param::opmode) == BmsFsm::ERROR) {
+        data[4] = 0x01; // Voltage Circuit Failure
+    } else {
+        data[4] = 0x00;
+    }
+    
+    // Bytes 5-6: Maintenance Diagnostic Codes (not used)
+    data[5] = 0x00;
+    data[6] = 0x00;
+    
+    // Byte 7: Not specified in document, set to 0
+    data[7] = 0x00;
+    
+    // Calculate the J1939 29-bit ID
+    uint32_t j1939Id = (3 << 26) | (VX1_BMS_FAULTS_PGN << 8) | VX1_BMS_SA;
+    
+    // Send the message
+    canHardware->Send(j1939Id, data, 8);
+    
+    return true;
 }

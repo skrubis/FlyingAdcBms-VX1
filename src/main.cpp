@@ -146,6 +146,7 @@ static void Ms100Task(void)
        VX1::TemperatureWarningTask(canMapExternal->GetHardware(), bmsFsm);
        VX1::UDeltaWarningTask(canMapExternal->GetHardware(), bmsFsm);
        VX1::ClockStatsDisplayTask(canMapExternal->GetHardware(), bmsFsm);
+       VX1::BmsPgnEmulationTask(canMapExternal->GetHardware(), bmsFsm);
    }
    
    if (Param::GetInt(Param::opmode) != BmsFsm::ERROR)

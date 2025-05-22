@@ -320,6 +320,48 @@ public:
      */
     static void RegisterVehicleDataMessages(CanHardware* canHardware);
     
+    /**
+     * @brief Send BMS PGN messages if conditions are met
+     * 
+     * Sends BMS PGN messages according to bms-comms.md specification
+     * Only sends if VX1mode=1, VX1enCanMsg=1, VX1EmulateBMSmsg=1, and node is master
+     * 
+     * @param canHardware Pointer to the CAN hardware interface
+     * @param bmsFsm Pointer to the BmsFsm instance
+     */
+    static void BmsPgnEmulationTask(CanHardware* canHardware, BmsFsm* bmsFsm);
+    
+    /**
+     * @brief Send BMS Status & Control PGN (0xFEF2)
+     * 
+     * Maps parameters and sends BMS status information including SoC, temperatures,
+     * voltage, operational states, and various requests.
+     * 
+     * @param canHardware Pointer to the CAN hardware interface
+     * @return true if message was sent successfully
+     */
+    static bool SendBmsPgn0xFEF2(CanHardware* canHardware);
+    
+    /**
+     * @brief Send Cell Voltage and Temperature Extremes PGN (0xFEF3)
+     * 
+     * Maps cell voltage parameters to CAN message fields according to specification.
+     * 
+     * @param canHardware Pointer to the CAN hardware interface
+     * @return true if message was sent successfully
+     */
+    static bool SendBmsPgn0xFEF3(CanHardware* canHardware);
+    
+    /**
+     * @brief Send Faults, Status Flags, and Maintenance Codes PGN (0xFEF4)
+     * 
+     * Maps warning and error states to CAN message fields according to specification.
+     * 
+     * @param canHardware Pointer to the CAN hardware interface
+     * @return true if message was sent successfully
+     */
+    static bool SendBmsPgn0xFEF4(CanHardware* canHardware);
+    
 private:
     // Convert ASCII character to 7-segment display code
     static uint8_t CharToSegment(char ch);

@@ -111,14 +111,18 @@
     PARAM_ENTRY(CAT_VX1_CAN,     VX1LCDClockStatVal, "0=soc, 1=uavg, 2=udelta, 3=tempmax, 4=power, 5=idcavg, 6=kWhper100km",     0,      6,      2,      153 ) \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1ErrWarn,  "0=Off, 1=On",     0,      1,      1,      154 ) \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1TempWarn,  "0=Off, 1=On",     0,      1,      1,      155 ) \
-    PARAM_ENTRY(CAT_VX1_CAN,     VX1TempWarnPoint, "°C",     40,     80,     55,     156 ) \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1TempWarnTest, "0=Off, 1=On",     0,      1,      0,      157 ) \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1uDeltaWarn,  "0=Off, 1=On",     0,      1,      1,      158 ) \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1uDeltaWarnTresh, "mV",     2,     500,    150,    159 ) \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1uDeltaWarnTest,  "0=Off, 1=On",     0,      1,      0,      160 ) \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1SendConfigMsg, "0=off, 2=regVX1drvCurr, 3=VX1regenMaxU 4=VX1regenMaxI, 5=VX1chrCellNo, 6=VX1chrCellMaxV, 7=VX1chrBattCap",   0,      8 ,      0,      161 ) \
-    PARAM_ENTRY(CAT_VX1_CAN,     VX1EmulateBMSmsg, "0=off, 1=onlyPwrReq, 2=all",   0,      2 ,      0,      162 ) \
+    PARAM_ENTRY(CAT_VX1_CAN,     VX1EmulateBMSmsg, "0=off, 1=on",   0,      1 ,      1,      162 ) \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1kWhResetDist, "km",   0.1,    20,      5,      163 ) \
+    PARAM_ENTRY(CAT_VX1_CAN,     VX1TempWarnHiPoint, "°C",     40,     80,     55,     164 ) \
+    PARAM_ENTRY(CAT_VX1_CAN,     VX1TempWarnLoPoint, "°C",     40,     80,     55,     165 ) \
+    PARAM_ENTRY(CAT_VX1_CAN,     VX1FanDuty, "%",     0,    100,     50,     166 ) \
+    PARAM_ENTRY(CAT_VX1_CAN,     VX1mockTemp, "°C",     -20,    55,     24,     167 ) \
+    PARAM_ENTRY(CAT_VX1_CAN,     VX1ModuleNumber, "1-15",     1,     15,     1,     168 ) \
     VALUE_ENTRY(version,     VERSTR, 2001 ) \
     VALUE_ENTRY(hwrev,       HWREVS, 2104 ) \
     VALUE_ENTRY(opmode,      OPMODES,2000 ) \
