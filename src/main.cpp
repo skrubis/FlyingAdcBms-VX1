@@ -301,6 +301,10 @@ extern "C" int main(void)
    s.AddTask(BmsIO::MeasureCurrent, 5);
    s.AddTask(ReadCellVoltages, 25);
    s.AddTask(Ms100Task, 100);
+   
+   // Initialize BMS CAN messaging static pointers
+   VX1::InitBmsCanMessaging(&c, &fsm);
+   s.AddTask(VX1::BmsCanMessagingTask, 10); // Run BMS CAN messaging every 10ms
 
    Param::SetInt(Param::hwrev, hwRev);
    Param::SetInt(Param::version, 4);

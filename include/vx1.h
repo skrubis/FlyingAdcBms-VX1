@@ -332,15 +332,48 @@ public:
     static void BmsPgnEmulationTask(CanHardware* canHardware, BmsFsm* bmsFsm);
     
     /**
-     * @brief Send BMS Status & Control PGN (0xFEF2)
+     * @brief Set the CAN hardware and BmsFsm pointers for BmsCanMessagingTask
      * 
-     * Maps parameters and sends BMS status information including SoC, temperatures,
-     * voltage, operational states, and various requests.
+     * This function must be called before BmsCanMessagingTask can be used
      * 
      * @param canHardware Pointer to the CAN hardware interface
+     * @param bmsFsm Pointer to the BmsFsm instance
+     */
+    static void InitBmsCanMessaging(CanHardware* canHardware, BmsFsm* bmsFsm);
+    
+    /**
+     * @brief New Task for BMS CAN messaging compatible with MC and charger
+     * 
+     * Implements the new message format required by the Motor Controller and charger.
+     * Only the master sends these messages with appropriate timing.
+     * This function has no parameters to be compatible with the scheduler.
+     */
+    static void BmsCanMessagingTask();
+    
+    /**
+     * @brief Send Module Status / Power-Limit Handshake PGN (0xFDF0)
+     * 
+     * Sends module status with power-limit flags for MC/charger.
+     * 
+     * @param canHardware Pointer to the CAN hardware interface
+     * @param sourceAddress Source address (0x40-0x48)
+     * @param counter Rolling counter (incremented every transmission)
      * @return true if message was sent successfully
      */
-    static bool SendBmsPgn0xFEF2(CanHardware* canHardware);
+    static bool SendModuleStatusPgn(CanHardware* canHardware, uint8_t sourceAddress, uint8_t& counter);
+    
+    /**
+     * @brief Send Pack Extremes PGN (0xFEF3) - New Format
+     * 
+     * Sends min/max voltages and temperatures in format required by MC/charger.
+     * 
+     * @param canHardware Pointer to the CAN hardware interface
+     * @param frameIndex Frame index / module number (0-3)
+     * @return true if message was sent successfully
+     */
+    static bool SendPackExtremesPgn(CanHardware* canHardware, uint8_t frameIndex);
+    
+    // FEF2 removed - not used by MC or charger
     
     /**
      * @brief Send Cell Voltage and Temperature Extremes PGN (0xFEF3)
@@ -353,15 +386,19 @@ public:
      */
     static bool SendBmsPgn0xFEF3(CanHardware* canHardware, uint8_t moduleNumber = 0);
     
+    // FEF4 removed - not used by MC or charger
+    
     /**
-     * @brief Send Faults, Status Flags, and Maintenance Codes PGN (0xFEF4)
+     * @brief Send Firmware Revision PGN (0xFEDA)
      * 
-     * Maps warning and error states to CAN message fields according to specification.
+     * Sends firmware revision as ASCII string "REV 1234" with appropriate source address.
+     * Master node sends with SA 0x40 and 0x41, node 11 with 0x42, node 12 with 0x43.
      * 
      * @param canHardware Pointer to the CAN hardware interface
+     * @param sourceAddress Source address to use for the message
      * @return true if message was sent successfully
      */
-    static bool SendBmsPgn0xFEF4(CanHardware* canHardware);
+    static bool SendFirmwareRevisionPgn(CanHardware* canHardware, uint8_t sourceAddress);
     
 private:
     // Convert ASCII character to 7-segment display code
@@ -375,6 +412,14 @@ private:
     static TelltaleState batteryState;
     static bool telltaleActive;
     static uint32_t lastTelltaleUpdateTime; // Store last time telltales were updated
+    static uint8_t telltaleStates;
+    
+    // Last update time for vehicle data (speed, gear, etc.)
+    static uint32_t lastVehicleDataTime;
+    
+    // Static pointers for BmsCanMessagingTask
+    static CanHardware* bmsCanHardware;
+    static BmsFsm* bmsFsmInstance;
     
     // Clock display data
     static char clockSegments[5]; // 4 segments + null terminator
@@ -398,7 +443,6 @@ private:
     static float vehicleSpeed;     // Current speed in km/h
     static float busVoltage;       // Bus voltage in V
     static float busCurrent;       // Bus current in A
-    static uint32_t lastVehicleDataTime; // Last time vehicle data was received
     
     // Energy consumption calculation variables
     static float totalEnergyWh;    // Total energy consumed in Wh
