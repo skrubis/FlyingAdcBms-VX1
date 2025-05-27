@@ -229,7 +229,12 @@
     VALUE_ENTRY(VX1busCurrent, "A", 2107 ) \
     VALUE_ENTRY(VX1kWhper100km, "kWh/100km", 2108 ) \
     VALUE_ENTRY(VX1DebugParam1, "Wh", 2109 ) \
-    VALUE_ENTRY(VX1DebugParam2, "km", 2110 )
+    VALUE_ENTRY(VX1DebugParam2, "km", 2110 ) \
+    /* Motor Controller Temperature Values from PGN 0xFF05 */ \
+    VALUE_ENTRY(MCHeatsinkTemp, "°C", 2111 ) \
+    VALUE_ENTRY(MCCapacitor1Temp, "°C", 2112 ) \
+    VALUE_ENTRY(MCCapacitor2Temp, "°C", 2113 ) \
+    VALUE_ENTRY(MCCapacitor3Temp, "°C", 2114 )
 
 
 /***** Enum String definitions *****/

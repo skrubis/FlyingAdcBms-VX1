@@ -307,6 +307,17 @@ public:
     static void ProcessVehicleDataMessage(uint32_t canId, uint32_t data[2]);
     
     /**
+     * @brief Process CAN messages with PGN FF05h from SA 0x05 (Motor Controller temperatures)
+     * 
+     * This function extracts heatsink and capacitor temperatures from the Motor Controller
+     * and updates the corresponding parameters.
+     * 
+     * @param canId CAN ID of the received message
+     * @param data Array containing the message data
+     */
+    static void ProcessMotorControllerTempMessage(uint32_t canId, uint32_t data[2]);
+    
+    /**
      * @brief Calculate kWh per 100km based on accumulated energy and distance
      * 
      * This function should be called periodically to update the consumption calculation
@@ -319,6 +330,13 @@ public:
      * @param canHardware Pointer to the CAN hardware interface
      */
     static void RegisterVehicleDataMessages(CanHardware* canHardware);
+    
+    /**
+     * @brief Register for receiving Motor Controller temperature messages (PGN 0xFF05)
+     * 
+     * @param canHardware Pointer to the CAN hardware interface
+     */
+    static void RegisterMCTempMessages(CanHardware* canHardware);
     
     /**
      * @brief Send BMS PGN messages if conditions are met

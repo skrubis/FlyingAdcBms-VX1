@@ -108,6 +108,11 @@ uint32_t VX1::lastCalculationTime = 0; // Last time consumption was calculated
 #define VX1_VEHICLE_DATA_SA 0x05
 #define VX1_VEHICLE_DATA_ID 0x18FEF105
 
+// J1939 PGN for Motor Controller temperature data messages
+#define VX1_MC_TEMP_PGN 0x00FF05
+#define VX1_MC_SA 0x05
+#define VX1_MC_TEMP_ID 0x18FF0505  // Priority 3 (0x18), PGN 0xFF05, SA 0x05
+
 // BMS PGN definitions
 #define VX1_BMS_STATUS_PGN 0x00FEF2 // BMS Status & Control
 #define VX1_BMS_VOLTTEMP_PGN 0x00FEF3 // Cell Voltage and Temperature Extremes
@@ -142,8 +147,40 @@ private:
     CanHardware* canHardware = nullptr;
 };
 
+// Custom CAN callback class to handle Motor Controller temperature messages
+class MCTempDataCallback : public CanCallback
+{
+public:
+    void HandleRx(uint32_t canId, uint32_t data[2], [[maybe_unused]] uint8_t dlc) override
+    {
+        // Forward the message to the VX1 class for processing
+        // Ignore the dlc parameter as it's not needed
+        VX1::ProcessMotorControllerTempMessage(canId, data);
+    }
+    
+    void HandleClear() override
+    {
+        // Re-register for MC temperature messages if CAN bus is cleared
+        if (canHardware) {
+            // We'll add this registration function next
+            VX1::RegisterMCTempMessages(canHardware);
+        }
+    }
+    
+    void SetCanHardware(CanHardware* hw)
+    {
+        canHardware = hw;
+    }
+    
+private:
+    CanHardware* canHardware = nullptr;
+};
+
 // Global instance of the vehicle data callback
 static VehicleDataCallback vehicleDataCallback;
+
+// Global instance of the Motor Controller temperature callback
+static MCTempDataCallback mcTempDataCallback;
 
 // Boot display sequence states
 enum BootDisplayState {
@@ -1011,25 +1048,37 @@ void VX1::CheckAndInitBootDisplay(CanHardware* canHardware, Stm32Scheduler* sche
 {
     static bool bootDisplayInitialized = false;
     static bool vehicleDataRegistered = false;
+    static bool mcTempDataRegistered = false;
     
-    // Register for vehicle data messages if not already done
+    // Register for vehicle data and MC temperature messages if not already done
     // Only register if:
     // 1. VX1mode = 1 (VX1 mode enabled)
     // 2. VX1enCanMsg = 1 (CAN messages enabled)
     // 3. We're on the master node
-    if (!vehicleDataRegistered && canHardware != nullptr && bmsFsm != nullptr &&
+    if (canHardware != nullptr && bmsFsm != nullptr &&
         Param::GetInt(Param::VX1mode) == 1 && 
         Param::GetInt(Param::VX1enCanMsg) == 1 &&
         IsMaster(bmsFsm)) // Check if this is the master node
     {
-        vehicleDataRegistered = true;
-        
         // Register for vehicle data messages
-        RegisterVehicleDataMessages(canHardware);
+        if (!vehicleDataRegistered) {
+            vehicleDataRegistered = true;
+            RegisterVehicleDataMessages(canHardware);
+            
+            // Set up the vehicle data callback
+            vehicleDataCallback.SetCanHardware(canHardware);
+            canHardware->AddCallback(&vehicleDataCallback);
+        }
         
-        // Set up the vehicle data callback
-        vehicleDataCallback.SetCanHardware(canHardware);
-        canHardware->AddCallback(&vehicleDataCallback);
+        // Register for Motor Controller temperature messages
+        if (!mcTempDataRegistered) {
+            mcTempDataRegistered = true;
+            RegisterMCTempMessages(canHardware);
+            
+            // Set up the MC temperature data callback
+            mcTempDataCallback.SetCanHardware(canHardware);
+            canHardware->AddCallback(&mcTempDataCallback);
+        }
     }
     
     // Initialize boot display screen once, when BMS is running
@@ -2096,6 +2145,19 @@ void VX1::RegisterVehicleDataMessages(CanHardware* canHardware)
 }
 
 /**
+ * Register for receiving Motor Controller temperature messages (PGN 0xFF05)
+ * 
+ * @param canHardware Pointer to the CAN hardware interface
+ */
+void VX1::RegisterMCTempMessages(CanHardware* canHardware)
+{
+    if (canHardware) {
+        // Register to receive Motor Controller temperature messages
+        canHardware->RegisterUserMessage(VX1_MC_TEMP_ID);
+    }
+}
+
+/**
  * Send BMS PGN messages if conditions are met
  * 
  * Sends BMS PGN messages according to bms-comms.md specification
@@ -2382,12 +2444,57 @@ bool VX1::SendModuleStatusPgn(CanHardware* canHardware, uint8_t sourceAddress, u
 }
 
 /**
+ * Process CAN messages with PGN FF05h from SA 0x05 (Motor Controller temperatures)
+ * 
+ * This function extracts heatsink and capacitor temperatures from the Motor Controller
+ * and updates the corresponding parameters.
+ * 
+ * @param canId CAN ID of the received message
+ * @param data Array containing the message data
+ */
+void VX1::ProcessMotorControllerTempMessage(uint32_t canId, uint32_t data[2])
+{
+    // Only process messages if:
+    // 1. The message has the correct CAN ID
+    // 2. VX1mode = 1 (VX1 mode enabled)
+    // 3. We're on the master node (nodeId = 0 or 10)
+    if (canId != VX1_MC_TEMP_ID || 
+        !IsEnabled() ||
+        (Param::GetInt(Param::modaddr) != 0 && Param::GetInt(Param::modaddr) != 10))
+    {
+        return;
+    }
+    
+    // Extract temperature data from the message
+    // The data is in the first data word (data[0])
+    uint8_t* bytes = (uint8_t*)data;
+    
+    // Byte 3: MC heat-sink temperature (°C)
+    uint8_t mcHeatsinkTemp = bytes[3];
+    
+    // Byte 4: Capacitor #1 temperature (°C)
+    uint8_t mcCap1Temp = bytes[4];
+    
+    // Byte 5: Capacitor #2 temperature (°C)
+    uint8_t mcCap2Temp = bytes[5];
+    
+    // Byte 6: Capacitor #3 temperature (°C)
+    uint8_t mcCap3Temp = bytes[6];
+    
+    // Update the parameters
+    Param::SetInt(Param::MCHeatsinkTemp, (int)mcHeatsinkTemp);
+    Param::SetInt(Param::MCCapacitor1Temp, (int)mcCap1Temp);
+    Param::SetInt(Param::MCCapacitor2Temp, (int)mcCap2Temp);
+    Param::SetInt(Param::MCCapacitor3Temp, (int)mcCap3Temp);
+}
+
+/**
  * Send Firmware Revision PGN (0xFEDA)
  * 
- * Sends firmware revision as ASCII string "FRA24C06" with appropriate source address.
+ * Sends firmware revision as ASCII string "REV 1234" with appropriate source address.
  * 
  * @param canHardware Pointer to the CAN hardware interface
- * @param sourceAddress Source address to use for the message
+ * @param sourceAddress Source address (0x40-0x48)
  * @return true if message was sent successfully
  */
 bool VX1::SendFirmwareRevisionPgn(CanHardware* canHardware, uint8_t sourceAddress)
