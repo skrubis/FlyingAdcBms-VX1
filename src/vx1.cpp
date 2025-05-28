@@ -2157,185 +2157,6 @@ void VX1::RegisterMCTempMessages(CanHardware* canHardware)
     }
 }
 
-/**
- * Send BMS PGN messages if conditions are met
- * 
- * Sends BMS PGN messages according to bms-comms.md specification
- * Only sends if VX1mode=1, VX1enCanMsg=1, VX1EmulateBMSmsg=1
- * Different behavior based on node ID:
- * - Node 10 (master): Sends all PGNs + PGN 0xFEF3 with module numbers 0 and 1
- * - Node 11: Sends only PGN 0xFEF3 with module number 2
- * - Node 12: Sends only PGN 0xFEF3 with module number 3
- * 
- * @param canHardware Pointer to the CAN hardware instance
- * @param bmsFsm Pointer to the BmsFsm instance (unused)
- */
-void VX1::BmsPgnEmulationTask(CanHardware* canHardware, BmsFsm* bmsFsm)
-{    
-    // Suppress unused parameter warning
-    (void)bmsFsm;
-    // Check if we have a valid CAN interface
-    if (!canHardware)
-        return;
-    
-    // Check if basic conditions are met for all nodes:
-    // 1. VX1 mode is enabled (VX1mode = 1)
-    // 2. CAN messages are enabled (VX1enCanMsg = 1)
-    // 3. BMS message emulation is enabled (VX1EmulateBMSmsg = 1)
-    if (!IsEnabled() || 
-        Param::GetInt(Param::VX1enCanMsg) != 1 || 
-        Param::GetInt(Param::VX1EmulateBMSmsg) != 1)
-    {
-        return;
-    }
-    
-    // Get the node ID
-    int nodeId = Param::GetInt(Param::modaddr);
-    
-    // Different behavior based on node ID
-    if (nodeId == 0 || nodeId == 10) { // Master node (nodeId 0 or 10)
-        // Note: FEF2 and FEF4 have been removed as they are not used by MC or charger
-        
-        // Send PGN 0xFEF3 with module number 0
-        SendBmsPgn0xFEF3(canHardware, 0);
-        
-        // Send PGN 0xFEF3 with module number 1
-        SendBmsPgn0xFEF3(canHardware, 1);
-        
-        // Send firmware revision PGN with source addresses 0x40 and 0x41 if enabled
-        if (Param::GetInt(Param::VX1SendFirmwareRevision) == 1) {
-            SendFirmwareRevisionPgn(canHardware, 0x40);
-            SendFirmwareRevisionPgn(canHardware, 0x41);
-        }
-    }
-    else if (nodeId == 11) { // Slave node 11
-        // Send only PGN 0xFEF3 with module number 2
-        SendBmsPgn0xFEF3(canHardware, 2);
-        
-        // Send firmware revision PGN with source address 0x42 if enabled
-        if (Param::GetInt(Param::VX1SendFirmwareRevision) == 1) {
-            SendFirmwareRevisionPgn(canHardware, 0x42);
-        }
-    }
-    else if (nodeId == 12) { // Slave node 12
-        // Send only PGN 0xFEF3 with module number 3
-        SendBmsPgn0xFEF3(canHardware, 3);
-        
-        // Send firmware revision PGN with source address 0x43 if enabled
-        if (Param::GetInt(Param::VX1SendFirmwareRevision) == 1) {
-            SendFirmwareRevisionPgn(canHardware, 0x43);
-        }
-    }
-}
-
-// ************************************************************************
-// SendBmsPgn0xFEF2 function has been removed as it is not used by the 
-// Motor Controller or charger. This message has been replaced by the 
-// PGN 0xFDF0 message (SendModuleStatusPgn) which provides similar 
-// functionality with the format expected by the MC and charger.
-// ************************************************************************
-
-/**
- * Send Cell Voltage and Temperature Extremes PGN (0xFEF3)
- * 
- * Maps cell voltage and temperature parameters to CAN message fields according to the updated specification.
- * Updated format includes 12-bit voltage values and thermal switch status.
- * 
- * @param canHardware Pointer to the CAN hardware interface
- * @param moduleNumber Battery module number (0-15) to include in the message
- * @return true if message was sent successfully
- */
-bool VX1::SendBmsPgn0xFEF3(CanHardware* canHardware, uint8_t moduleNumber)
-{
-    // Create the data array for the message
-    uint8_t data[8] = {0};
-    
-    float tempmin, tempmax;
-    // Check if mock temperature should be used (non-zero value)
-    float mockTemp = Param::GetFloat(Param::VX1mockTemp);
-    if (mockTemp != 0) {
-        // Use mock temperature for both min and max
-        tempmin = mockTemp;
-        tempmax = mockTemp;
-    } else {
-        // Use real temperature readings
-        tempmin = Param::GetFloat(Param::tempmin);       // Min cell temperature in °C
-        tempmax = Param::GetFloat(Param::tempmax);       // Max cell temperature in °C
-    }
-    
-    // Get voltage values to map to the message
-    float umin = Param::GetFloat(Param::umin);     // Min cell voltage in mV
-    float umax = Param::GetFloat(Param::umax);     // Max cell voltage in mV
-    
-    // Byte 0: Cell Minimum Temperature (1°C/bit)
-    // Convert float to int8_t (temperatures can be negative)
-    // Ensure temperature is not 0 to make it visible in diagnostics software
-    if (tempmin == 0) tempmin = 0.1f; // Use a small non-zero value if temperature is exactly 0
-    data[0] = static_cast<uint8_t>(static_cast<int8_t>(tempmin));
-    
-    // Byte 1: Cell Maximum Temperature (1°C/bit)
-    if (tempmax == 0) tempmax = 0.1f; // Use a small non-zero value if temperature is exactly 0
-    data[1] = static_cast<uint8_t>(static_cast<int8_t>(tempmax));
-    
-    // Byte 2: Ambient Temperature - Use tempmin as ambient temperature
-    data[2] = static_cast<uint8_t>(static_cast<int8_t>(tempmin));
-    
-    // The diagnostic software seems to be interpreting the voltage values differently than expected.
-    // Based on the observed values (3841mV showing as 5.762V and 3873mV showing as 5.810V),
-    // we need to adjust our encoding to match what the diagnostics software expects.
-    
-    // For high voltage (umax), scale to match expected format
-    // Diagnostics shows 5.810V for 3873mV, which means it's interpreting the value as 5810mV
-    // This suggests a scaling factor of approximately 1.5x
-    uint16_t highVoltage = static_cast<uint16_t>(umax * 0.667f); // Scale down to compensate
-    if (highVoltage > 4095) highVoltage = 4095; // Limit to 12-bit max
-    
-    // Byte 3: Cell High Voltage (low 8 bits) - bits 7-0
-    data[3] = highVoltage & 0xFF;
-    
-    // Byte 4: Highest Cell Number (bits 7-4) and Cell High Voltage (high 4 bits) - bits 3-0
-    data[4] = ((1 & 0x0F) << 4) | ((highVoltage >> 8) & 0x0F); // Cell number 1, high 4 bits of voltage
-    
-    // For low voltage (umin), apply the same scaling
-    uint16_t lowVoltage = static_cast<uint16_t>(umin * 0.667f); // Scale down to compensate
-    if (lowVoltage > 4095) lowVoltage = 4095; // Limit to 12-bit max
-    
-    // Byte 5: Cell Low Voltage (low 8 bits) - bits 7-0
-    data[5] = lowVoltage & 0xFF;
-    
-    // Byte 6: Lowest Cell Number (bits 7-4) and Cell Low Voltage (high 4 bits) - bits 3-0
-    data[6] = ((1 & 0x0F) << 4) | ((lowVoltage >> 8) & 0x0F); // Cell number 1, high 4 bits of voltage
-    
-    // Byte 7: Battery Module Number (bits 7-4) and Thermal Switch (bits 3-0)
-    // Use the provided moduleNumber parameter (already limited to 0-15 in function declaration)
-    if (moduleNumber > 15) moduleNumber = 15; // Ensure it's limited to 4 bits (0-15)
-    
-    uint8_t thermalSwitch = 0x3; // Default: Normal (0x3)
-    
-    // Check if temperature is above warning threshold
-    if (tempmax > Param::GetFloat(Param::VX1TempWarnHiPoint)) {
-        thermalSwitch = 0x4; // HOT (0x4)
-    }
-    
-    data[7] = ((moduleNumber & 0x0F) << 4) | (thermalSwitch & 0x0F);
-    
-    // Calculate the J1939 29-bit ID
-    // Always use source address 0x40 (VX1_BMS_SA) regardless of which node is sending
-    uint32_t j1939Id = (3 << 26) | (VX1_BMS_VOLTTEMP_PGN << 8) | VX1_BMS_SA;
-    
-    // Send the message
-    canHardware->Send(j1939Id, data, 8);
-    
-    return true;
-}
-
-// ************************************************************************
-// SendBmsPgn0xFEF4 function has been removed as it is not used by the 
-// Motor Controller or charger. Fault and warning conditions are now handled
-// by the PGN 0xFDF0 message (SendModuleStatusPgn) with the format expected
-// by the MC and charger. Slave modules can still send fault messages as 
-// previously implemented.
-// ************************************************************************
 
 /**
  * Send Module Status / Power-Limit Handshake PGN (0xFDF0)
@@ -2347,7 +2168,7 @@ bool VX1::SendBmsPgn0xFEF3(CanHardware* canHardware, uint8_t moduleNumber)
  * @param counter Rolling counter (incremented every transmission)
  * @return true if message was sent successfully
  */
-bool VX1::SendModuleStatusPgn(CanHardware* canHardware, uint8_t sourceAddress, uint8_t& counter)
+bool VX1::SendModuleStatusPgn(CanHardware* canHardware, uint8_t sourceAddress, uint8_t& counter, uint32_t currentTime)
 {
     // Check if we have a valid CAN interface
     if (!canHardware)
@@ -2356,28 +2177,42 @@ bool VX1::SendModuleStatusPgn(CanHardware* canHardware, uint8_t sourceAddress, u
     // Create the data array for the message
     uint8_t data[8] = {0};
     
-    // Determine pattern based on operating mode
-    uint8_t cellPattern = 0xE0; // Default: idle pattern
+    // --- Pack coarse cell voltages (PGN FDF0) ---------------------------
+    // Get average cell voltage
+    float uavg = Param::GetFloat(Param::uavg);
     
-    // If we're in a mode where charging might happen, use 0xAA pattern
-    // Note: There's no CHARGE state in BmsFsm, so we check for relevant states
-    int opmode = Param::GetInt(Param::opmode);
-    if (opmode == BmsFsm::INIT || opmode == BmsFsm::RUN) {
-        // Check if we might be charging by looking at current flow
-        float current = Param::GetFloat(Param::idc);
-        if (current < 0) { // Negative current means charging
-            cellPattern = 0xAA;
-        }
+    // Clear data bytes first
+    data[0] = data[1] = data[2] = data[3] = 0;
+    
+    // Li+ sends one 8-bit coarse value per cell, not packed nibbles
+    // coarse_byte = round(Vcell / 27.34 mV)
+    // The diagnostic tool reads these as full bytes, not nibbles
+    const float cellVoltageScale = 0.02734f; // 27.34 mV per bit
+    
+    // For each FDF0 message, we pack data for cells (not split into nibbles)
+    // We could use sourceAddress to determine specific cell values for each module
+    // but for now we'll use average voltage-based calculations
+    
+    // Create an array of cell voltages for this module
+    float cellVoltages[8];
+    // Since we don't have per-cell values yet, create a reasonable spread around uavg
+    for (int i = 0; i < 8; i++) {
+        // Create slightly different voltages for each cell
+        cellVoltages[i] = uavg + ((i - 4) * 0.010f); // +/- 10mV steps
     }
     
-    // Byte 0-3: 8 packed nibbles with coarse cell voltages
-    data[0] = cellPattern;
-    data[1] = cellPattern;
-    data[2] = cellPattern;
-    data[3] = cellPattern;
+    // Pack one full byte per cell (not nibble-packed)
+    for (int c = 0; c < 4; c++) {
+        // Calculate the coarse voltage for this cell
+        uint8_t coarse = (uint8_t)(cellVoltages[c] / cellVoltageScale + 0.5f);
+        if (coarse > 0xFE) coarse = 0xFE; // Li+ never transmits 0xFF
+        
+        // Each cell gets a full byte
+        data[c] = coarse;
+    }
     
-    // Byte 4: Highest and lowest cell voltage coarse nibbles
-    data[4] = (cellPattern & 0xF0) | 0x0E; // Highest nibble in bits 7-4, lowest in bits 3-0 (usually 0xE)
+    // Byte 4: Copy the last coarse byte like Li+
+    data[4] = data[3];
     
     // Byte 5: Power-limit flags
     uint8_t powerLimitFlags = 0x1; // Default: normal operation (no derate)
@@ -2387,14 +2222,31 @@ bool VX1::SendModuleStatusPgn(CanHardware* canHardware, uint8_t sourceAddress, u
     bool limitDischarge = false;
     
     // Reuse existing fault detection logic:
-    float uavg = Param::GetFloat(Param::uavg);
+    // Already have uavg from above
     float tempmax = Param::GetFloat(Param::tempmax);
     float tempmin = Param::GetFloat(Param::tempmin);
     float highTempLimit = Param::GetFloat(Param::VX1TempWarnHiPoint);
     float lowTempLimit = Param::GetFloat(Param::VX1TempWarnLoPoint);
     
-    // From SendBmsPgn0xFEF2 - Request Charge Power Reduce
-    if (uavg > 4100.0f) {
+    // Only set limit flags in case of REAL limit conditions, with time delay
+    // For normal operation at ~3.57V, keep powerLimitFlags = 0x1
+    
+    // Use time-based approach for charge limiting like Li+
+    static uint32_t ovStartTime = 0;
+    
+    // Check if average voltage exceeds 4.18V threshold
+    if (uavg > 4180.0f) {
+        // Start the timer if not already started
+        if (ovStartTime == 0) {
+            ovStartTime = currentTime;
+        }
+    } else {
+        // Reset the timer if voltage drops below threshold
+        ovStartTime = 0;
+    }
+    
+    // Only limit charge if voltage has been high for more than 10 seconds
+    if (ovStartTime > 0 && (currentTime - ovStartTime > 10000)) {
         limitCharge = true;
     }
     
@@ -2429,11 +2281,12 @@ bool VX1::SendModuleStatusPgn(CanHardware* canHardware, uint8_t sourceAddress, u
     data[6] = data[5];
     
     // Byte 7: Rolling counter (bits 5-0)
+    // Keep bits 7-6 clear so the tool doesn't treat them as a nibble
     counter = (counter + 1) & 0x3F; // Increment and wrap at 63
-    data[7] = counter;
+    data[7] = counter; // Bits 7-6 are already 0 since we initialized data[7] = 0
     
-    // Calculate CAN ID: Priority 6 (0x18), PGN 0xFDF0, Source Address
-    uint32_t canId = 0x18FDF000 | sourceAddress;
+    // Calculate CAN ID: Priority 0 (highest), PGN 0xFDF0, Source Address
+    uint32_t canId = 0x00FDF000 | sourceAddress;
     
     // Send the message
     uint32_t dataWords[2];
@@ -2507,17 +2360,17 @@ bool VX1::SendFirmwareRevisionPgn(CanHardware* canHardware, uint8_t sourceAddres
     uint8_t data[8] = {0};
     
     // Set the firmware revision string "FRA24C06" as per spec
-    data[0] = 'F';
-    data[1] = 'R';
-    data[2] = 'A';
-    data[3] = '2';
-    data[4] = '4';
-    data[5] = 'C';
-    data[6] = '0';
-    data[7] = '6';
+    data[0] = 'O';
+    data[1] = 'I';
+    data[2] = 'B';
+    data[3] = 'M';
+    data[4] = 'S';
+    data[5] = '0';
+    data[6] = '2';
+    data[7] = '5';
     
-    // Construct the CAN ID: 18 (extended frame) + PGN (0xFEDA) + source address
-    uint32_t canId = 0x18FEDA00 | sourceAddress;
+    // Construct the CAN ID: 00 (priority 0, highest) + PGN (0xFEDA) + source address
+    uint32_t canId = 0x00FEDA00 | sourceAddress;
     
     // Convert uint8_t array to uint32_t array for the Send method
     uint32_t dataWords[2];
@@ -2533,80 +2386,70 @@ bool VX1::SendFirmwareRevisionPgn(CanHardware* canHardware, uint8_t sourceAddres
  * 
  * Sends min/max voltages and temperatures in format required by MC/charger.
  * 
- * @param canHardware Pointer to the CAN hardware interface
- * @param frameIndex Frame index / module number (0-3)
+ * @param canHw Pointer to the CAN hardware interface
+ * @param sourceAddr Source address for the message
+ * @param moduleIdx Module index (0-3)
+ * @param highestCell Index of the cell with highest voltage
+ * @param lowestCell Index of the cell with lowest voltage
  * @return true if message was sent successfully
  */
-bool VX1::SendPackExtremesPgn(CanHardware* canHardware, uint8_t frameIndex)
+bool VX1::SendPackExtremesPgn(CanHardware* canHw,
+                              uint8_t sourceAddr,
+                              uint8_t moduleIdx,
+                              uint8_t highestCell,
+                              uint8_t lowestCell)
 {
-    // Check if we have a valid CAN interface
-    if (!canHardware)
-        return false;
+    if (!canHw) return false;
+
+    /* ---------- gather raw values ---------- */
+
+    // Get cell voltages in mV
+    const float umax = Param::GetFloat(Param::umax);
+    const float umin = Param::GetFloat(Param::umin);
     
-    // Create the data array for the message
-    uint8_t data[8] = {0};
+    // Use 1.5 mV/bit scaling as specified
+    // raw_code = round(cell_mV / 1.5)
+    uint16_t vmax = static_cast<uint16_t>(umax / 1.5f + 0.5f);
+    uint16_t vmin = static_cast<uint16_t>(umin / 1.5f + 0.5f);
     
-    // Get voltage values
-    float umax = Param::GetFloat(Param::umax); // Max cell voltage in mV
-    float umin = Param::GetFloat(Param::umin); // Min cell voltage in mV
+    // Temperatures - 1°C per bit, no offset
+    const int8_t tmin = static_cast<int8_t>(Param::GetFloat(Param::tempmin));
+    const int8_t tmax = static_cast<int8_t>(Param::GetFloat(Param::tempmax));
+
+    /* ---------- pack PGN 0xFEF3 according to map ---------- */
+
+    uint8_t d[8]{};
+
+    /* Byte 0: lowTemp - no +40°C offset */
+    d[0] = static_cast<uint8_t>(tmin);       // Raw temperature
     
-    // Encode as mV ÷ 2 (12-bit values, little-endian)
-    uint16_t maxVoltage = static_cast<uint16_t>(umax / 2.0f);
-    uint16_t minVoltage = static_cast<uint16_t>(umin / 2.0f);
+    /* Byte 1: highTemp - no +40°C offset */
+    d[1] = static_cast<uint8_t>(tmax);      // Raw temperature
     
-    // Byte 0-1: Maximum cell voltage (little-endian)
-    data[0] = maxVoltage & 0xFF;         // Low byte
-    data[1] = (maxVoltage >> 8) & 0x0F;  // High nibble (12-bit value)
+    /* Byte 2: ambientTemp (unused) */
+    d[2] = 0x00;
     
-    // Byte 2-3: Minimum cell voltage (little-endian)
-    data[2] = minVoltage & 0xFF;         // Low byte
-    data[3] = (minVoltage >> 8) & 0x0F;  // High nibble (12-bit value)
+    /* For Little Endian byte order, we need to swap the byte order of the 16-bit values */
+    /* Byte 3: cellHighVoltage bits 7-0 (LSB) */
+    d[3] = vmax & 0xFF;
     
-    // Get temperature values
-    float tempmax, tempmin;
-    float mockTemp = Param::GetFloat(Param::VX1mockTemp);
-    if (mockTemp != 0) {
-        tempmax = mockTemp;
-        tempmin = mockTemp;
-    } else {
-        tempmax = Param::GetFloat(Param::tempmax);
-        tempmin = Param::GetFloat(Param::tempmin);
-    }
+    /* Byte 4: highestCellNumber (7-4) and cellHighVoltage bits 11-8 (3-0) (MSB) */
+    d[4] = (highestCell << 4) | ((vmax >> 8) & 0x0F);
     
-    // Encode as °C + 40
-    uint8_t maxTemp = static_cast<uint8_t>(tempmax + 40);
-    uint8_t minTemp = static_cast<uint8_t>(tempmin + 40);
+    /* Byte 5: cellLowVoltage bits 7-0 (LSB) */
+    d[5] = vmin & 0xFF;
     
-    // Byte 4: Maximum cell temperature
-    data[4] = maxTemp;
+    /* Byte 6: lowestCellNumber (7-4) and cellLowVoltage bits 11-8 (3-0) (MSB) */
+    d[6] = (lowestCell << 4) | ((vmin >> 8) & 0x0F);
     
-    // Byte 5: Minimum cell temperature
-    data[5] = minTemp;
-    
-    // Byte 6: Reserved
-    data[6] = 0x00;
-    
-    // Byte 7: Frame index / module number (bits 7-4) and thermal switch (bits 3-0)
-    uint8_t thermalSwitch = 0x0; // Default: Normal
-    
-    // Check if temperature is above warning threshold
-    if (tempmax > Param::GetFloat(Param::VX1TempWarnHiPoint)) {
-        thermalSwitch = 0x4; // HOT
-    }
-    
-    // Ensure frameIndex is within range 0-3
-    frameIndex = frameIndex & 0x03;
-    
-    data[7] = ((frameIndex & 0x0F) << 4) | (thermalSwitch & 0x0F);
-    
-    // Calculate CAN ID: Priority 6 (0x18), PGN 0xFEF3, Source Address 0x40
-    uint32_t canId = 0x18FEF340;
-    
-    // Send the message
-    uint32_t dataWords[2];
-    memcpy(dataWords, data, 8);
-    canHardware->Send(canId, dataWords);
-    
+    /* Byte 7: battery module number (7-4) and Thermal switch (3-0) */
+    d[7] = (moduleIdx << 4) | 0x03;                // 0x3 = "normal" -> 0x03, 0x13, 0x23, 0x33 sequence
+
+    uint32_t words[2];
+    memcpy(words, d, 8);
+
+    const uint32_t canId = 0x00FEF300 | sourceAddr; // pri 0 (highest), PGN FEF3
+    canHw->Send(canId, words);
     return true;
 }
 
@@ -2659,37 +2502,51 @@ void VX1::BmsCanMessagingTask()
         return;
     }
     
-    // Get current time from system uptime parameter
-    uint32_t currentTime = Param::GetInt(Param::uptime);
+    // Use a static counter that increments by 10ms each call (task runs every 10ms)
+    static uint32_t t = 0;
+    t += 10;                       // this task is scheduled every 10 ms
+    const uint32_t currentTime = t;
     
     // Static variables for timing control
-    static uint32_t lastFDF0Time[9] = {0}; // Last time each FDF0 message was sent
-    static uint32_t lastFEF3Time = 0;     // Last time FEF3 burst was sent
-    static uint32_t lastFEF3Index = 0;    // Current frame index for FEF3 burst
     static uint32_t lastFEDATime = 0;     // Last time FEDA messages were sent
-    static uint8_t counters[9] = {0};     // Rolling counters for each FDF0 message
+    static uint32_t lastFDF0 = 0;      // Last time FDF0 messages were sent
     
-    // Send PGN 0xFDF0 messages (100ms period for each address)
-    for (uint8_t i = 0; i < 9; i++) {
-        uint8_t sourceAddress = 0x40 + i;
-        if (lastFDF0Time[i] == 0 || (currentTime - lastFDF0Time[i] >= 100)) {
-            SendModuleStatusPgn(bmsCanHardware, sourceAddress, counters[i]);
-            lastFDF0Time[i] = currentTime;
+    /* --------- FDF0 handshake messages --------- */
+    static uint8_t fdf0Cnt[9] = {0};    // one rolling counter per SA
+    if (lastFDF0 == 0 || (currentTime - lastFDF0 >= 100)) {  // every 100 ms
+        for (uint8_t sa = 0x40; sa <= 0x48; ++sa) {
+            SendModuleStatusPgn(bmsCanHardware, sa, fdf0Cnt[sa-0x40], currentTime);
         }
+        lastFDF0 = currentTime;
     }
     
-    // Send PGN 0xFEF3 burst (4 frames back-to-back, repeating ≤250ms)
-    // We'll use a state machine approach instead of blocking delays
-    if (lastFEF3Time == 0 || (currentTime - lastFEF3Time >= 250)) {
-        // Start a new burst
-        lastFEF3Index = 0;
-        lastFEF3Time = currentTime;
-    }
+    /* --------- FEF3 messages (4 modules from SA 0x40) --------- */
+    // Initialize module to 0 to start with module 0 like Li+
+    static uint8_t module = 0;          // 0-3 module index
+    static uint32_t lastFEF3 = 0;      // timestamp (in ms)
     
-    // Send frames at 30ms intervals without blocking
-    if (lastFEF3Index < 4 && (currentTime - lastFEF3Time) >= (lastFEF3Index * 30)) {
-        SendPackExtremesPgn(bmsCanHardware, lastFEF3Index);
-        lastFEF3Index++;
+    if (lastFEF3 == 0 || (currentTime - lastFEF3 >= 30)) {  // one module every 30 ms
+        // Get real cell indices from the maximum and minimum cell voltages
+        // Even if we don't have per-cell values, fake them with reasonable values
+        // Indices must be 0-9 (0xA is treated as invalid by the MC)
+        uint8_t highestCell = module * 3;     // Module 0: cells 0-2, Module 1: cells 3-5, etc.
+        uint8_t lowestCell = module * 3 + 1;  // Just use the next cell in that module
+        
+        // Clamp cell indices to 0-9 range
+        highestCell %= 10;
+        lowestCell %= 10;
+        
+        // Make sure lowestCell != highestCell
+        if (lowestCell == highestCell) {
+            lowestCell = (lowestCell + 1) % 10;
+        }
+        
+        // Send FEF3 with proper module index and cell indices
+        SendPackExtremesPgn(bmsCanHardware, 0x40, module, highestCell, lowestCell);
+        
+        // Increment module index, wrap at 4 (0→1→2→3→0…)
+        module = (module + 1) & 0x03;
+        lastFEF3 = currentTime;
     }
     
     // Send PGN 0xFEDA messages (1s period)

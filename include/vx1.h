@@ -339,17 +339,6 @@ public:
     static void RegisterMCTempMessages(CanHardware* canHardware);
     
     /**
-     * @brief Send BMS PGN messages if conditions are met
-     * 
-     * Sends BMS PGN messages according to bms-comms.md specification
-     * Only sends if VX1mode=1, VX1enCanMsg=1, VX1EmulateBMSmsg=1, and node is master
-     * 
-     * @param canHardware Pointer to the CAN hardware interface
-     * @param bmsFsm Pointer to the BmsFsm instance
-     */
-    static void BmsPgnEmulationTask(CanHardware* canHardware, BmsFsm* bmsFsm);
-    
-    /**
      * @brief Set the CAN hardware and BmsFsm pointers for BmsCanMessagingTask
      * 
      * This function must be called before BmsCanMessagingTask can be used
@@ -378,31 +367,26 @@ public:
      * @param counter Rolling counter (incremented every transmission)
      * @return true if message was sent successfully
      */
-    static bool SendModuleStatusPgn(CanHardware* canHardware, uint8_t sourceAddress, uint8_t& counter);
+    static bool SendModuleStatusPgn(CanHardware* canHardware, uint8_t sourceAddress, uint8_t& counter, uint32_t currentTime);
     
     /**
      * @brief Send Pack Extremes PGN (0xFEF3) - New Format
      * 
      * Sends min/max voltages and temperatures in format required by MC/charger.
      * 
-     * @param canHardware Pointer to the CAN hardware interface
-     * @param frameIndex Frame index / module number (0-3)
+     * @param canHw Pointer to the CAN hardware interface
+     * @param sourceAddr Source address for the message
+     * @param moduleIdx Module index (0-3)
+     * @param highestCell Index of the cell with highest voltage
+     * @param lowestCell Index of the cell with lowest voltage
      * @return true if message was sent successfully
      */
-    static bool SendPackExtremesPgn(CanHardware* canHardware, uint8_t frameIndex);
+    static bool SendPackExtremesPgn(CanHardware* canHw, uint8_t sourceAddr, uint8_t moduleIdx, 
+                                     uint8_t highestCell = 0, uint8_t lowestCell = 0);
     
     // FEF2 removed - not used by MC or charger
     
-    /**
-     * @brief Send Cell Voltage and Temperature Extremes PGN (0xFEF3)
-     * 
-     * Maps cell voltage parameters to CAN message fields according to specification.
-     * 
-     * @param canHardware Pointer to the CAN hardware interface
-     * @param moduleNumber Battery module number (0-15) to include in the message
-     * @return true if message was sent successfully
-     */
-    static bool SendBmsPgn0xFEF3(CanHardware* canHardware, uint8_t moduleNumber = 0);
+
     
     // FEF4 removed - not used by MC or charger
     
