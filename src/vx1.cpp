@@ -2178,41 +2178,45 @@ bool VX1::SendModuleStatusPgn(CanHardware* canHardware, uint8_t sourceAddress, u
     uint8_t data[8] = {0};
     
     // --- Pack coarse cell voltages (PGN FDF0) ---------------------------
-    // Get average cell voltage
+    // Get average cell voltage (needed for both cell voltages and power limit checks)
     float uavg = Param::GetFloat(Param::uavg);
     
     // Clear data bytes first
-    data[0] = data[1] = data[2] = data[3] = 0;
+    data[0] = data[1] = data[2] = data[3] = data[4] = 0;
     
-    // Li+ sends one 8-bit coarse value per cell, not packed nibbles
-    // coarse_byte = round(Vcell / 27.34 mV)
-    // The diagnostic tool reads these as full bytes, not nibbles
-    const float cellVoltageScale = 0.02734f; // 27.34 mV per bit
-    
-    // For each FDF0 message, we pack data for cells (not split into nibbles)
-    // We could use sourceAddress to determine specific cell values for each module
-    // but for now we'll use average voltage-based calculations
-    
-    // Create an array of cell voltages for this module
-    float cellVoltages[8];
-    // Since we don't have per-cell values yet, create a reasonable spread around uavg
-    for (int i = 0; i < 8; i++) {
-        // Create slightly different voltages for each cell
-        cellVoltages[i] = uavg + ((i - 4) * 0.010f); // +/- 10mV steps
-    }
-    
-    // Pack one full byte per cell (not nibble-packed)
-    for (int c = 0; c < 4; c++) {
-        // Calculate the coarse voltage for this cell
-        uint8_t coarse = (uint8_t)(cellVoltages[c] / cellVoltageScale + 0.5f);
-        if (coarse > 0xFE) coarse = 0xFE; // Li+ never transmits 0xFF
+    // Check if cell voltage transmission is enabled
+    if (Param::GetInt(Param::VX1SendCellVoltages) == 1) {
+        // Li+ sends one 8-bit coarse value per cell, not packed nibbles
+        // coarse_byte = round(Vcell / 27.34 mV)
+        // The diagnostic tool reads these as full bytes, not nibbles
+        const float cellVoltageScale = 0.02734f; // 27.34 mV per bit
         
-        // Each cell gets a full byte
-        data[c] = coarse;
+        // For each FDF0 message, we pack data for cells (not split into nibbles)
+        // We could use sourceAddress to determine specific cell values for each module
+        // but for now we'll use average voltage-based calculations
+        
+        // Create an array of cell voltages for this module
+        float cellVoltages[8];
+        // Since we don't have per-cell values yet, create a reasonable spread around uavg
+        for (int i = 0; i < 8; i++) {
+            // Create slightly different voltages for each cell
+            cellVoltages[i] = uavg + ((i - 4) * 0.010f); // +/- 10mV steps
+        }
+        
+        // Pack one full byte per cell (not nibble-packed)
+        for (int c = 0; c < 4; c++) {
+            // Calculate the coarse voltage for this cell
+            uint8_t coarse = (uint8_t)(cellVoltages[c] / cellVoltageScale + 0.5f);
+            if (coarse > 0xFE) coarse = 0xFE; // Li+ never transmits 0xFF
+            
+            // Each cell gets a full byte
+            data[c] = coarse;
+        }
+        
+        // Byte 4: Copy the last coarse byte like Li+
+        data[4] = data[3];
     }
-    
-    // Byte 4: Copy the last coarse byte like Li+
-    data[4] = data[3];
+    // If VX1SendCellVoltages is disabled, all voltage bytes remain 0
     
     // Byte 5: Power-limit flags
     uint8_t powerLimitFlags = 0x1; // Default: normal operation (no derate)
