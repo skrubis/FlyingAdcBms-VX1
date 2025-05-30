@@ -156,7 +156,9 @@ BmsFsm::bmsstate BmsFsm::Run(bmsstate currentState)
       }
       break;
    case RUN:
-      if (ABS(Param::GetFloat(Param::idcavg)) < 0.8f)
+      // Convert milliamps to amps for comparison
+      idleCurrentThreshold = Param::GetInt(Param::idlecurrent) / 1000.0f;
+      if (ABS(Param::GetFloat(Param::idcavg)) < idleCurrentThreshold)
       {
          cycles++;
 
