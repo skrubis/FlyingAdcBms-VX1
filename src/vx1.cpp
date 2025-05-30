@@ -2411,6 +2411,8 @@ void VX1::SyncBmsToVX1Parameters()
     Param::SetFloat(Param::VX1udelta, udelta);
     Param::SetFloat(Param::VX1uavg, uavg);
     
+    // Note: We don't have a VX1soc parameter, but SOC is shared using standard CAN message
+    
     // Copy temperature values (these don't need correction)
     Param::SetFloat(Param::VX1tempmin, Param::GetFloat(Param::tempmin));
     Param::SetFloat(Param::VX1tempmax, Param::GetFloat(Param::tempmax));

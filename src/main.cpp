@@ -207,11 +207,50 @@ static void ReadCellVoltages(void)
    else if (Param::GetBool(Param::enable) && (opmode == BmsFsm::RUN || opmode == BmsFsm::IDLE))
    {
       BmsIO::ReadCellVoltages();
-      // Call the voltage correction function to fix any sign bit issues in CAN messages
-      BmsIO::CorrectAllVoltages();
+      BmsIO::CorrectAllVoltages(); // Apply voltage correction to all voltage parameters
+      // Don't turn off the mux here as it breaks the reading sequence on the master node
    }
    else
       FlyingAdcBms::MuxOff();
+}
+
+static void ForceSOCFromVoltage()
+{
+    // Only execute on master node
+    if (!bmsFsm->IsFirst()) return;
+
+    // Ensure voltages are corrected before calculating SOC
+    BmsIO::CorrectAllVoltages();
+    
+    // Get umin for SOC calculation and validation
+    float umin = Param::GetFloat(Param::umin);
+    
+    // Debug verification - print values to validate
+    Param::SetInt(Param::errinfo, (int)umin); // Use errinfo to see the umin value
+    
+    // Only proceed if we have a reasonable voltage (>2.5V)
+    if (umin > 2500) {
+        // Calculate SOC directly from voltage
+        float estimatedSoc = BmsAlgo::EstimateSocFromVoltage(umin);
+        
+        // Force-set the SOC value
+        Param::SetFloat(Param::soc, estimatedSoc);
+        
+        // Store in NVRAM for persistence
+        BKP_DR1 = (uint16_t)(estimatedSoc * 100);
+        
+        // Initialize the static estimatedSoc variable in CalculateSocSoh
+        // This is essential for proper SOC integration
+        BmsFsm::bmsstate currentState = (BmsFsm::bmsstate)Param::GetInt(Param::opmode);
+        
+        // Reset SOC integration variables to ensure clean calculation
+        static_cast<void>(Param::SetFloat(Param::chargein, 0));
+        static_cast<void>(Param::SetFloat(Param::chargeout, 0));
+        
+        // Call SOC calculation twice to ensure proper initialization
+        CalculateSocSoh(currentState, currentState);
+        CalculateSocSoh(currentState, currentState);
+    }
 }
 
 /** This function is called when the user changes a parameter */
@@ -314,6 +353,7 @@ extern "C" int main(void)
    Param::Change(Param::PARAM_LAST); //Call callback once for general parameter propagation
 
    LoadNVRAM();
+   ForceSOCFromVoltage();
    
    // Boot welcome screen will be displayed from Ms100Task
    // VX1::DisplayBootWelcomeScreen(&c, &s);

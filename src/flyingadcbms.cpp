@@ -81,7 +81,7 @@ void FlyingAdcBms::Init()
    gpio_set_mode(GPIOB, GPIO_MODE_OUTPUT_50_MHZ, GPIO_CNF_OUTPUT_PUSHPULL, 255);
 
    if (hwRev == HW_23)
-      i2cdelay = 30;
+      i2cdelay = 5;
 }
 
 void FlyingAdcBms::MuxOff()

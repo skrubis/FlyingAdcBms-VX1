@@ -274,7 +274,33 @@ void BmsIO::CorrectAllVoltages()
    // Correct all voltage parameters that could be affected by sign bit misinterpretation
    if (bmsFsm->IsFirst())
    {
-      // For master node, correct values from all sub-modules
+      // First check global values used for SOC calculation
+      float umin = Param::GetFloat(Param::umin);
+      float umax = Param::GetFloat(Param::umax);
+      float uavg = Param::GetFloat(Param::uavg);
+      float utotal = Param::GetFloat(Param::utotal);
+      
+      // Apply corrections if needed to global values
+      if (umin < 0 && umin > -4096)
+         Param::SetFloat(Param::umin, umin + 8192.0f);
+      
+      if (umax < 0 && umax > -4096)
+         Param::SetFloat(Param::umax, umax + 8192.0f);
+      
+      if (uavg < 0 && uavg > -4096)
+         Param::SetFloat(Param::uavg, uavg + 8192.0f);
+         
+      if (utotal < 0)
+         Param::SetFloat(Param::utotal, utotal + 8192.0f * Param::GetInt(Param::totalcells));
+      
+      // Update VX1-specific parameters with corrected values
+      Param::SetFloat(Param::VX1umin, Param::GetFloat(Param::umin));
+      Param::SetFloat(Param::VX1umax, Param::GetFloat(Param::umax));
+      Param::SetFloat(Param::VX1uavg, Param::GetFloat(Param::uavg));
+      Param::SetFloat(Param::VX1utotal, Param::GetFloat(Param::utotal));
+      Param::SetFloat(Param::VX1udelta, Param::GetFloat(Param::umax) - Param::GetFloat(Param::umin));
+      
+      // Then correct values from all sub-modules
       for (int i = 1; i < bmsFsm->GetNumberOfModules(); i++)
       {
          // Get current values
@@ -282,7 +308,7 @@ void BmsIO::CorrectAllVoltages()
          float umin = Param::GetFloat(bmsFsm->GetDataItem(Param::umin0, i));
          float umax = Param::GetFloat(bmsFsm->GetDataItem(Param::umax0, i));
          
-         // Apply corrections if needed
+         // Apply corrections if needed - only for values in the problematic range
          if (uavg < 0 && uavg > -4096)
             Param::SetFloat(bmsFsm->GetDataItem(Param::uavg0, i), uavg + 8192.0f);
          
@@ -309,6 +335,12 @@ void BmsIO::CorrectAllVoltages()
       
       if (umax < 0 && umax > -4096)
          Param::SetFloat(Param::umax, umax + 8192.0f);
+      
+      // Update VX1-specific parameters
+      Param::SetFloat(Param::VX1uavg, Param::GetFloat(Param::uavg));
+      Param::SetFloat(Param::VX1umin, Param::GetFloat(Param::umin));
+      Param::SetFloat(Param::VX1umax, Param::GetFloat(Param::umax));
+      Param::SetFloat(Param::VX1udelta, Param::GetFloat(Param::umax) - Param::GetFloat(Param::umin));
    }
 }
 
