@@ -258,10 +258,23 @@ void BmsIO::TestReadCellVoltage(int chan, FlyingAdcBms::BalanceCommand cmd)
    Param::SetFloat((Param::PARAM_NUM)(Param::u0 + chan), udc);
 }
 
+float BmsIO::CorrectVoltage(float value)
+{
+   // Fix sign bit interpretation issue: If value is negative but close to -4096,
+   // it's likely a 13-bit unsigned value incorrectly interpreted as signed
+   if (value < 0 && value > -4096) {
+      // Convert the negative 13-bit value back to positive by adding 2^13
+      return value + 8192.0f;
+   }
+   return value;
+}
+
 void BmsIO::Accumulate(float sum, float min, float max, float avg)
 {
+
    if (bmsFsm->IsFirst())
    {
+      // For master node
       Param::SetFloat(Param::uavg0, avg);
       Param::SetFloat(Param::umin0, min);
       Param::SetFloat(Param::umax0, max);
@@ -271,9 +284,13 @@ void BmsIO::Accumulate(float sum, float min, float max, float avg)
       for (int i = 1; i < bmsFsm->GetNumberOfModules(); i++)
       {
          //Here we undo the local average calculation on the module to calculate the substrings total voltage
-         totalSum += Param::GetFloat(bmsFsm->GetDataItem(Param::uavg0, i)) * bmsFsm->GetCellsOfModule(i);
-         totalMin = MIN(totalMin, Param::GetFloat(bmsFsm->GetDataItem(Param::umin0, i)));
-         totalMax = MAX(totalMax, Param::GetFloat(bmsFsm->GetDataItem(Param::umax0, i)));
+         float subAvg = CorrectVoltage(Param::GetFloat(bmsFsm->GetDataItem(Param::uavg0, i)));
+         float subMin = CorrectVoltage(Param::GetFloat(bmsFsm->GetDataItem(Param::umin0, i)));
+         float subMax = CorrectVoltage(Param::GetFloat(bmsFsm->GetDataItem(Param::umax0, i)));
+         
+         totalSum += subAvg * bmsFsm->GetCellsOfModule(i);
+         totalMin = MIN(totalMin, subMin);
+         totalMax = MAX(totalMax, subMax);
       }
 
       float tempmin = NO_TEMP, tempmax = -40;
@@ -297,13 +314,39 @@ void BmsIO::Accumulate(float sum, float min, float max, float avg)
       Param::SetFloat(Param::utotal, totalSum);
       Param::SetFloat(Param::tempmin, tempmin);
       Param::SetFloat(Param::tempmax, tempmax);
+      
+      // Update VX1-specific parameters (from previous fix)
+      // This ensures VX1 uses the corrected values without modifying BMS calculations
+      Param::SetFloat(Param::VX1umin, totalMin);
+      Param::SetFloat(Param::VX1umax, totalMax);
+      Param::SetFloat(Param::VX1uavg, totalSum / Param::GetInt(Param::totalcells));
+      Param::SetFloat(Param::VX1udelta, totalMax - totalMin);
+      Param::SetFloat(Param::VX1utotal, totalSum);
+      Param::SetFloat(Param::VX1tempmin, tempmin);
+      Param::SetFloat(Param::VX1tempmax, tempmax);
    }
-   else //if we are a sub module write averages straight to data module
+   else //if we are a sub module
    {
+      // For sub-modules - also apply correction to values received from master/other nodes
+      
+      // Set local values that we measured directly
       Param::SetFloat(Param::utotal, sum);
       Param::SetFloat(Param::uavg0, avg);
       Param::SetFloat(Param::umin0, min);
       Param::SetFloat(Param::umax0, max);
       Param::SetFloat(Param::udelta, max - min);
+      
+      // Always apply correction to values coming from CAN communication
+      // We need to correct both positive and negative values to handle the inconsistent behavior
+      Param::SetFloat(Param::uavg, CorrectVoltage(Param::GetFloat(Param::uavg)));
+      Param::SetFloat(Param::umin, CorrectVoltage(Param::GetFloat(Param::umin)));
+      Param::SetFloat(Param::umax, CorrectVoltage(Param::GetFloat(Param::umax)));
+      
+      // Update VX1-specific parameters (from previous fix)
+      Param::SetFloat(Param::VX1utotal, sum);
+      Param::SetFloat(Param::VX1uavg, CorrectVoltage(Param::GetFloat(Param::uavg)));
+      Param::SetFloat(Param::VX1umin, CorrectVoltage(Param::GetFloat(Param::umin)));
+      Param::SetFloat(Param::VX1umax, CorrectVoltage(Param::GetFloat(Param::umax)));
+      Param::SetFloat(Param::VX1udelta, CorrectVoltage(Param::GetFloat(Param::umax)) - CorrectVoltage(Param::GetFloat(Param::umin)));
    }
 }

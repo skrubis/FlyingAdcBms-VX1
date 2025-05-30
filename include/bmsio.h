@@ -33,6 +33,9 @@ class BmsIO
       static void TestReadCellVoltage(int chan, FlyingAdcBms::BalanceCommand cmd);
       static void MeasureCurrent();
       static void SetBmsFsm(BmsFsm* b) { bmsFsm = b; }
+      
+      // Helper function to correct voltage values affected by sign bit misinterpretation in CAN messages
+      static float CorrectVoltage(float value);
 
    private:
       static void Accumulate(float sum, float min, float max, float avg);

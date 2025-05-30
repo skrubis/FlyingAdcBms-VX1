@@ -384,6 +384,15 @@ public:
     static bool SendPackExtremesPgn(CanHardware* canHw, uint8_t sourceAddr, uint8_t moduleIdx, 
                                      uint8_t highestCell = 0, uint8_t lowestCell = 0);
     
+    /**
+     * @brief Synchronize BMS parameters to VX1-specific parameters
+     * 
+     * Copies BMS parameter values to VX1-specific parameters to prevent interference
+     * with BMS calculations while still allowing VX1 code to use these values.
+     * Should be called before sending any CAN messages that use battery data.
+     */
+    static void SyncBmsToVX1Parameters();
+    
     // FEF2 removed - not used by MC or charger
     
 

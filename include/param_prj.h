@@ -234,7 +234,15 @@
     VALUE_ENTRY(MCHeatsinkTemp, "°C", 2111 ) \
     VALUE_ENTRY(MCCapacitor1Temp, "°C", 2112 ) \
     VALUE_ENTRY(MCCapacitor2Temp, "°C", 2113 ) \
-    VALUE_ENTRY(MCCapacitor3Temp, "°C", 2114 )
+    VALUE_ENTRY(MCCapacitor3Temp, "°C", 2114 ) \
+    /* VX1-specific copies of BMS parameters to avoid interference */ \
+    VALUE_ENTRY(VX1umax,       "mV",   2115 ) \
+    VALUE_ENTRY(VX1umin,       "mV",   2116 ) \
+    VALUE_ENTRY(VX1utotal,     "mV",   2117 ) \
+    VALUE_ENTRY(VX1tempmin,    "°C",   2118 ) \
+    VALUE_ENTRY(VX1tempmax,    "°C",   2119 ) \
+    VALUE_ENTRY(VX1udelta,     "mV",   2120 ) \
+    VALUE_ENTRY(VX1uavg,       "mV",   2121 )
 
 
 /***** Enum String definitions *****/

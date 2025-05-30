@@ -33,6 +33,7 @@
 
 
 #include "vx1.h"
+#include "bmsio.h"
 #include <libopencm3/stm32/f1/bkp.h>
 #include <cmath>   // For fabs
 #include "printf.h"  // Use project's printf implementation
@@ -2179,7 +2180,8 @@ bool VX1::SendModuleStatusPgn(CanHardware* canHardware, uint8_t sourceAddress, u
     
     // --- Pack coarse cell voltages (PGN FDF0) ---------------------------
     // Get average cell voltage (needed for both cell voltages and power limit checks)
-    float uavg = Param::GetFloat(Param::uavg);
+    // Use VX1-specific parameter to avoid interfering with BMS calculations
+    float vx1_uavg = Param::GetFloat(Param::VX1uavg);
     
     // Clear data bytes first
     data[0] = data[1] = data[2] = data[3] = data[4] = 0;
@@ -2197,10 +2199,10 @@ bool VX1::SendModuleStatusPgn(CanHardware* canHardware, uint8_t sourceAddress, u
         
         // Create an array of cell voltages for this module
         float cellVoltages[8];
-        // Since we don't have per-cell values yet, create a reasonable spread around uavg
+        // Since we don't have per-cell values yet, create a reasonable spread around vx1_uavg
         for (int i = 0; i < 8; i++) {
             // Create slightly different voltages for each cell
-            cellVoltages[i] = uavg + ((i - 4) * 0.010f); // +/- 10mV steps
+            cellVoltages[i] = vx1_uavg + ((i - 4) * 0.010f); // +/- 10mV steps
         }
         
         // Pack one full byte per cell (not nibble-packed)
@@ -2226,9 +2228,9 @@ bool VX1::SendModuleStatusPgn(CanHardware* canHardware, uint8_t sourceAddress, u
     bool limitDischarge = false;
     
     // Reuse existing fault detection logic:
-    // Already have uavg from above
-    float tempmax = Param::GetFloat(Param::tempmax);
-    float tempmin = Param::GetFloat(Param::tempmin);
+    // Already have vx1_uavg from above
+    float vx1_tempmax = Param::GetFloat(Param::VX1tempmax);
+    float vx1_tempmin = Param::GetFloat(Param::VX1tempmin);
     float highTempLimit = Param::GetFloat(Param::VX1TempWarnHiPoint);
     float lowTempLimit = Param::GetFloat(Param::VX1TempWarnLoPoint);
     
@@ -2239,7 +2241,7 @@ bool VX1::SendModuleStatusPgn(CanHardware* canHardware, uint8_t sourceAddress, u
     static uint32_t ovStartTime = 0;
     
     // Check if average voltage exceeds 4.18V threshold
-    if (uavg > 4180.0f) {
+    if (vx1_uavg > 4180.0f) {
         // Start the timer if not already started
         if (ovStartTime == 0) {
             ovStartTime = currentTime;
@@ -2255,12 +2257,12 @@ bool VX1::SendModuleStatusPgn(CanHardware* canHardware, uint8_t sourceAddress, u
     }
     
     // From SendBmsPgn0xFEF2 - Request Discharge Power Reduce
-    if (uavg < 3450.0f) {
+    if (vx1_uavg < 3450.0f) {
         limitDischarge = true;
     }
     
     // Check temperature limits
-    if (tempmax > highTempLimit || tempmin < lowTempLimit) {
+    if (vx1_tempmax > highTempLimit || vx1_tempmin < lowTempLimit) {
         limitCharge = true;
     }
     
@@ -2386,6 +2388,35 @@ bool VX1::SendFirmwareRevisionPgn(CanHardware* canHardware, uint8_t sourceAddres
 }
 
 /**
+ * Synchronize BMS parameters to VX1-specific parameters
+ * 
+ * Copies BMS parameter values to VX1-specific parameters to prevent interference
+ * with BMS calculations while still allowing VX1 code to use these values.
+ * 
+ * Also applies voltage correction to handle sign bit misinterpretation issues in CAN messages.
+ */
+void VX1::SyncBmsToVX1Parameters()
+{
+    // Get voltage values from BMS parameters with correction applied
+    float utotal = Param::GetFloat(Param::utotal);
+    float umax = BmsIO::CorrectVoltage(Param::GetFloat(Param::umax));
+    float umin = BmsIO::CorrectVoltage(Param::GetFloat(Param::umin));
+    float uavg = BmsIO::CorrectVoltage(Param::GetFloat(Param::uavg));
+    float udelta = umax - umin;
+    
+    // Copy corrected values to VX1-specific parameters
+    Param::SetFloat(Param::VX1utotal, utotal);
+    Param::SetFloat(Param::VX1umax, umax);
+    Param::SetFloat(Param::VX1umin, umin);
+    Param::SetFloat(Param::VX1udelta, udelta);
+    Param::SetFloat(Param::VX1uavg, uavg);
+    
+    // Copy temperature values (these don't need correction)
+    Param::SetFloat(Param::VX1tempmin, Param::GetFloat(Param::tempmin));
+    Param::SetFloat(Param::VX1tempmax, Param::GetFloat(Param::tempmax));
+}
+
+/**
  * Send Pack Extremes PGN (0xFEF3) - New Format
  * 
  * Sends min/max voltages and temperatures in format required by MC/charger.
@@ -2407,18 +2438,18 @@ bool VX1::SendPackExtremesPgn(CanHardware* canHw,
 
     /* ---------- gather raw values ---------- */
 
-    // Get cell voltages in mV
-    const float umax = Param::GetFloat(Param::umax);
-    const float umin = Param::GetFloat(Param::umin);
+    // Get cell voltages from VX1-specific parameters in mV
+    const float vx1_umax = Param::GetFloat(Param::VX1umax);
+    const float vx1_umin = Param::GetFloat(Param::VX1umin);
     
     // Use 1.5 mV/bit scaling as specified
     // raw_code = round(cell_mV / 1.5)
-    uint16_t vmax = static_cast<uint16_t>(umax / 1.5f + 0.5f);
-    uint16_t vmin = static_cast<uint16_t>(umin / 1.5f + 0.5f);
+    uint16_t vmax = static_cast<uint16_t>(vx1_umax / 1.5f + 0.5f);
+    uint16_t vmin = static_cast<uint16_t>(vx1_umin / 1.5f + 0.5f);
     
     // Temperatures - 1°C per bit, no offset
-    const int8_t tmin = static_cast<int8_t>(Param::GetFloat(Param::tempmin));
-    const int8_t tmax = static_cast<int8_t>(Param::GetFloat(Param::tempmax));
+    const int8_t tmin = static_cast<int8_t>(Param::GetFloat(Param::VX1tempmin));
+    const int8_t tmax = static_cast<int8_t>(Param::GetFloat(Param::VX1tempmax));
 
     /* ---------- pack PGN 0xFEF3 according to map ---------- */
 
@@ -2515,13 +2546,21 @@ void VX1::BmsCanMessagingTask()
     static uint32_t lastFEDATime = 0;     // Last time FEDA messages were sent
     static uint32_t lastFDF0 = 0;      // Last time FDF0 messages were sent
     
+    /* --------- Synchronize BMS parameters to VX1-specific parameters --------- */
+    // This ensures VX1 code doesn't interfere with BMS calculations
+    SyncBmsToVX1Parameters();
+    
     /* --------- FDF0 handshake messages --------- */
     static uint8_t fdf0Cnt[9] = {0};    // one rolling counter per SA
-    if (lastFDF0 == 0 || (currentTime - lastFDF0 >= 100)) {  // every 100 ms
-        for (uint8_t sa = 0x40; sa <= 0x48; ++sa) {
-            SendModuleStatusPgn(bmsCanHardware, sa, fdf0Cnt[sa-0x40], currentTime);
+    
+    // Only send FDF0 messages if VX1SendCellVoltages is enabled
+    if (Param::GetInt(Param::VX1SendCellVoltages) == 1) {
+        if (lastFDF0 == 0 || (currentTime - lastFDF0 >= 100)) {  // every 100 ms
+            for (uint8_t sa = 0x40; sa <= 0x48; ++sa) {
+                SendModuleStatusPgn(bmsCanHardware, sa, fdf0Cnt[sa-0x40], currentTime);
+            }
+            lastFDF0 = currentTime;
         }
-        lastFDF0 = currentTime;
     }
     
     /* --------- FEF3 messages (4 modules from SA 0x40) --------- */
