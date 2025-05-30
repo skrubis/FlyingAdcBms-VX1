@@ -36,6 +36,9 @@ class BmsIO
       
       // Helper function to correct voltage values affected by sign bit misinterpretation in CAN messages
       static float CorrectVoltage(float value);
+      
+      // Function to correct all voltage parameters that might be affected by sign bit issues
+      static void CorrectAllVoltages();
 
    private:
       static void Accumulate(float sum, float min, float max, float avg);

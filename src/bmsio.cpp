@@ -269,6 +269,49 @@ float BmsIO::CorrectVoltage(float value)
    return value;
 }
 
+void BmsIO::CorrectAllVoltages()
+{
+   // Correct all voltage parameters that could be affected by sign bit misinterpretation
+   if (bmsFsm->IsFirst())
+   {
+      // For master node, correct values from all sub-modules
+      for (int i = 1; i < bmsFsm->GetNumberOfModules(); i++)
+      {
+         // Get current values
+         float uavg = Param::GetFloat(bmsFsm->GetDataItem(Param::uavg0, i));
+         float umin = Param::GetFloat(bmsFsm->GetDataItem(Param::umin0, i));
+         float umax = Param::GetFloat(bmsFsm->GetDataItem(Param::umax0, i));
+         
+         // Apply corrections if needed
+         if (uavg < 0 && uavg > -4096)
+            Param::SetFloat(bmsFsm->GetDataItem(Param::uavg0, i), uavg + 8192.0f);
+         
+         if (umin < 0 && umin > -4096)
+            Param::SetFloat(bmsFsm->GetDataItem(Param::umin0, i), umin + 8192.0f);
+         
+         if (umax < 0 && umax > -4096)
+            Param::SetFloat(bmsFsm->GetDataItem(Param::umax0, i), umax + 8192.0f);
+      }
+   }
+   else
+   {
+      // For sub-modules, correct values received from master
+      float uavg = Param::GetFloat(Param::uavg);
+      float umin = Param::GetFloat(Param::umin);
+      float umax = Param::GetFloat(Param::umax);
+      
+      // Apply corrections if needed
+      if (uavg < 0 && uavg > -4096)
+         Param::SetFloat(Param::uavg, uavg + 8192.0f);
+      
+      if (umin < 0 && umin > -4096)
+         Param::SetFloat(Param::umin, umin + 8192.0f);
+      
+      if (umax < 0 && umax > -4096)
+         Param::SetFloat(Param::umax, umax + 8192.0f);
+   }
+}
+
 void BmsIO::Accumulate(float sum, float min, float max, float avg)
 {
 

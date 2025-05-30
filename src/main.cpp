@@ -205,7 +205,11 @@ static void ReadCellVoltages(void)
    else if (testchan >= 0)
       BmsIO::TestReadCellVoltage(testchan, (FlyingAdcBms::BalanceCommand)Param::GetInt(Param::testbalance));
    else if (Param::GetBool(Param::enable) && (opmode == BmsFsm::RUN || opmode == BmsFsm::IDLE))
+   {
       BmsIO::ReadCellVoltages();
+      // Call the voltage correction function to fix any sign bit issues in CAN messages
+      BmsIO::CorrectAllVoltages();
+   }
    else
       FlyingAdcBms::MuxOff();
 }
