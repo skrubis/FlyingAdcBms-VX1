@@ -155,10 +155,23 @@ BmsFsm::bmsstate BmsFsm::Run(bmsstate currentState)
          return ERROR;
       }
       break;
-   case RUN:
+   case RUN: {
       // Convert milliamps to amps for comparison
       idleCurrentThreshold = Param::GetInt(Param::idlecurrent) / 1000.0f;
-      if (ABS(Param::GetFloat(Param::idcavg)) < idleCurrentThreshold)
+      float raw_idcavg_run = Param::GetFloat(Param::idcavg);
+      float corrected_idcavg_run;
+      // Correct for 16-bit signed value, misinterpreted due to CAN_SIGNED=0
+      // Gain for idcavg is 0.1 as per canMap->AddRecv(Param::idcavg, pdobase, 32, 16, 0.1);
+      uint16_t misinterpreted_unsigned_word_run = static_cast<uint16_t>(raw_idcavg_run / 0.1f);
+      int16_t signed_word_no_gain_run;
+      if (misinterpreted_unsigned_word_run > 32767) { // Check if original MSB (bit 15) was set
+         signed_word_no_gain_run = static_cast<int16_t>(misinterpreted_unsigned_word_run - 65536);
+      } else {
+         signed_word_no_gain_run = static_cast<int16_t>(misinterpreted_unsigned_word_run);
+      }
+      corrected_idcavg_run = static_cast<float>(signed_word_no_gain_run) * 0.1f;
+
+      if (ABS(corrected_idcavg_run) < idleCurrentThreshold)
       {
          cycles++;
 
@@ -173,13 +186,27 @@ BmsFsm::bmsstate BmsFsm::Run(bmsstate currentState)
          cycles = 0;
       }
       break;
-   case IDLE:
+   }
+   case IDLE: {
       cycles++;
 
       // Check if current is above the idle threshold to return to RUN state
       // Convert milliamps to amps for comparison
       idleCurrentThreshold = Param::GetInt(Param::idlecurrent) / 1000.0f;
-      if (ABS(Param::GetFloat(Param::idcavg)) > idleCurrentThreshold)
+      float raw_idcavg_idle = Param::GetFloat(Param::idcavg);
+      float corrected_idcavg_idle;
+      // Correct for 16-bit signed value, misinterpreted due to CAN_SIGNED=0
+      // Gain for idcavg is 0.1 as per canMap->AddRecv(Param::idcavg, pdobase, 32, 16, 0.1);
+      uint16_t misinterpreted_unsigned_word_idle = static_cast<uint16_t>(raw_idcavg_idle / 0.1f);
+      int16_t signed_word_no_gain_idle;
+      if (misinterpreted_unsigned_word_idle > 32767) { // Check if original MSB (bit 15) was set
+         signed_word_no_gain_idle = static_cast<int16_t>(misinterpreted_unsigned_word_idle - 65536);
+      } else {
+         signed_word_no_gain_idle = static_cast<int16_t>(misinterpreted_unsigned_word_idle);
+      }
+      corrected_idcavg_idle = static_cast<float>(signed_word_no_gain_idle) * 0.1f;
+
+      if (ABS(corrected_idcavg_idle) > idleCurrentThreshold)
       {
          return RUN;
       }
@@ -194,6 +221,7 @@ BmsFsm::bmsstate BmsFsm::Run(bmsstate currentState)
          DigIo::selfena_out.Clear();
          DigIo::nextena_out.Clear();
       }
+    } // Closes scope for case IDLE
       break;
    case ERROR:
       if (Param::GetBool(Param::enable))

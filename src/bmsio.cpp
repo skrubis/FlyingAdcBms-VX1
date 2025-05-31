@@ -28,7 +28,8 @@ BmsFsm* BmsIO::bmsFsm;
 void BmsIO::ReadCellVoltages()
 {
    const int totalBalanceCycles = 30;
-   static uint8_t chan = 0, balanceCycles = 0;
+   static uint16_t balanceCycles[18] = {0};
+   static uint8_t chan = 0;
    static float sum = 0, min, max, avg;
    int balMode = Param::GetInt(Param::balmode);
    bool balance = Param::GetInt(Param::opmode) == BmsFsm::IDLE && Param::GetFloat(Param::uavg) > Param::GetFloat(Param::ubalance) && BAL_OFF != balMode;
@@ -36,16 +37,16 @@ void BmsIO::ReadCellVoltages()
 
    if (balance)
    {
-      if (balanceCycles == 0)
+      if (balanceCycles[chan] == 0)
       {
-         balanceCycles = totalBalanceCycles; //this leads to switching to next channel below
+         balanceCycles[chan] = totalBalanceCycles; //this leads to switching to next channel below
       }
       else
       {
-         balanceCycles--;
+         balanceCycles[chan]--;
       }
 
-      if (balanceCycles > 0 && balanceCycles < (totalBalanceCycles - 1))
+      if (balanceCycles[chan] > 0 && balanceCycles[chan] < (totalBalanceCycles - 1))
       {
          float udc = Param::GetFloat((Param::PARAM_NUM)(Param::u0 + chan));
          float balanceTarget = 0;
@@ -53,30 +54,85 @@ void BmsIO::ReadCellVoltages()
          switch (balMode)
          {
          case BAL_ADD: //maximum cell voltage is target when only adding
-            balanceTarget = Param::GetFloat(Param::umax);
+            balanceTarget = CorrectVoltage(Param::GetFloat(Param::umax));
             break;
          case BAL_DIS: //minimum cell voltage is target when only dissipating
-            balanceTarget = Param::GetFloat(Param::umin);
+            balanceTarget = CorrectVoltage(Param::GetFloat(Param::umin));
             break;
          case BAL_BOTH: //average cell voltage is target when dissipating and adding
-            balanceTarget = Param::GetFloat(Param::uavg);
+            balanceTarget = CorrectVoltage(Param::GetFloat(Param::uavg));
             break;
          default: //not balancing
             break;
          }
 
-         if (udc < (balanceTarget - 3) && (balMode & BAL_ADD))
+         // Calculate adaptive thresholds based on voltage delta and minimum values
+         float deltaV = CorrectVoltage(Param::GetFloat(Param::umax)) - CorrectVoltage(Param::GetFloat(Param::umin));
+         float chargeThreshold = MAX(3.0f, deltaV * 0.02f);  // At least 3mV or 2% of delta
+         float dischargeThreshold = MAX(1.0f, deltaV * 0.01f);  // At least 1mV or 1% of delta
+         
+         // Static variables to cache global values for slave nodes
+         static float cachedUmin = 0.0f;
+         static float cachedUmax = 0.0f;
+         static float cachedUavg = 0.0f;
+         static uint32_t lastCacheUpdateTime = 0;
+         static uint32_t cacheCounter = 0;
+         cacheCounter++;
+         
+         // Cache values with a timeout mechanism for slave nodes
+         if (!bmsFsm->IsFirst()) {
+             // Current cached values
+             float currentUmin = CorrectVoltage(Param::GetFloat(Param::umin));
+             float currentUmax = CorrectVoltage(Param::GetFloat(Param::umax));
+             float currentUavg = CorrectVoltage(Param::GetFloat(Param::uavg));
+             
+             // Check if values changed significantly (received update from master)
+             bool valuesChanged = (ABS(currentUmin - cachedUmin) > 1.0f) || 
+                                 (ABS(currentUmax - cachedUmax) > 1.0f) || 
+                                 (ABS(currentUavg - cachedUavg) > 1.0f);
+             
+             if (valuesChanged) {
+                 // Update cached values
+                 cachedUmin = currentUmin;
+                 cachedUmax = currentUmax;
+                 cachedUavg = currentUavg;
+                 lastCacheUpdateTime = cacheCounter;
+             }
+             
+             // Make balancing decisions more sensitive on slave nodes
+             chargeThreshold = MAX(1.5f, deltaV * 0.01f);    // More aggressive (1.5mV minimum)
+             dischargeThreshold = MAX(0.5f, deltaV * 0.005f); // More aggressive (0.5mV minimum)
+             
+             // If cache is stale (no updates for 200 cycles ~5 seconds), use even more aggressive thresholds
+             if ((cacheCounter - lastCacheUpdateTime) > 200) {
+                 // Use more aggressive thresholds if not receiving regular updates
+                 chargeThreshold = MAX(1.0f, deltaV * 0.005f);     // Very aggressive
+                 dischargeThreshold = MAX(0.3f, deltaV * 0.0025f); // Very aggressive
+             }
+             
+             // Special case for significant outliers
+             float significantDeviation = 50.0f; // mV
+             if (ABS(udc - balanceTarget) > significantDeviation) {
+                 // For big deviations, use even more aggressive thresholds
+                 if (udc < balanceTarget)
+                     chargeThreshold = 1.0f; // Extremely aggressive charge threshold for low cells
+                 else
+                     dischargeThreshold = 0.3f; // Extremely aggressive discharge threshold for high cells
+             }
+         }
+                  
+         if (udc < (balanceTarget - chargeThreshold) && (balMode & BAL_ADD))
          {
             bstt = FlyingAdcBms::SetBalancing(FlyingAdcBms::BAL_CHARGE);
          }
-         else if (udc > (balanceTarget + 1) && (balMode & BAL_DIS))
+         else if (udc > (balanceTarget + dischargeThreshold) && (balMode & BAL_DIS))
          {
             bstt = FlyingAdcBms::SetBalancing(FlyingAdcBms::BAL_DISCHARGE);
          }
          else
          {
             bstt = FlyingAdcBms::SetBalancing(FlyingAdcBms::BAL_OFF);
-            balanceCycles = 0;
+            balanceCycles[chan] = 0;
          }
          Param::SetInt((Param::PARAM_NUM)(Param::u0cmd + chan), bstt);
       }
@@ -87,13 +143,13 @@ void BmsIO::ReadCellVoltages()
    }
    else
    {
-      balanceCycles = totalBalanceCycles;
+      balanceCycles[chan] = totalBalanceCycles;
       bstt = FlyingAdcBms::SetBalancing(FlyingAdcBms::BAL_OFF);
       Param::SetInt((Param::PARAM_NUM)(Param::u0cmd + chan), bstt);
    }
 
    //Read cell voltage when balancing is turned off
-   if (balanceCycles == totalBalanceCycles)
+   if (balanceCycles[chan] >= totalBalanceCycles)
    {
       float gain = Param::GetFloat(Param::gain);
       int numChan = Param::GetInt(Param::numchan);
@@ -138,21 +194,6 @@ void BmsIO::ReadCellVoltages()
          max = 0;
          sum = 0;
       }
-
-      /*if ((chan + 1) >= Param::GetInt(Param::numchan))
-      {
-         chan = 0;
-         avg = sum / Param::GetInt(Param::numchan);
-         Accumulate(sum, min, max, avg);
-
-         min = 8000;
-         max = 0;
-         sum = 0;
-      }
-      else
-      {
-         chan++;
-      }*/
 
       FlyingAdcBms::SelectChannel(chan);
       FlyingAdcBms::StartAdc();

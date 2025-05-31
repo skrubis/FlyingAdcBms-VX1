@@ -33,7 +33,7 @@ CFLAGS		= -Os -Wall -Wextra -Iinclude/ -Ilibopeninv/include -Ilibopencm3/include
              -fno-common -fno-builtin -pedantic -DSTM32F1 \
 				 -mcpu=cortex-m3 -mthumb -std=gnu99 -ffunction-sections -fdata-sections
 CPPFLAGS    = -Og -ggdb -Wall -Wextra -Iinclude/ -Ilibopeninv/include -Ilibopencm3/include \
-            -fno-common -std=c++11 -pedantic -DSTM32F1 -DCAN_PERIPH_SPEED=32 -DCAN_SIGNED=1 -DCAN_EXT -D$(HW) \
+            -fno-common -std=c++11 -pedantic -DSTM32F1 -DCAN_PERIPH_SPEED=32 -DCAN_SIGNED=0 -DCAN_EXT -D$(HW) \
 				-ffunction-sections -fdata-sections -fno-builtin -fno-rtti -fno-exceptions -fno-unwind-tables -mcpu=cortex-m3 -mthumb
 # Check if the variable GITHUB_RUN_NUMBER exists. When running on the github actions running, this
 # variable is automatically available.
