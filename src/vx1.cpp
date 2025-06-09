@@ -2392,16 +2392,14 @@ bool VX1::SendFirmwareRevisionPgn(CanHardware* canHardware, uint8_t sourceAddres
  * 
  * Copies BMS parameter values to VX1-specific parameters to prevent interference
  * with BMS calculations while still allowing VX1 code to use these values.
- * 
- * Also applies voltage correction to handle sign bit misinterpretation issues in CAN messages.
  */
 void VX1::SyncBmsToVX1Parameters()
 {
-    // Get voltage values from BMS parameters with correction applied
+    // Get voltage values directly from BMS parameters (no correction needed with CAN_SIGNED=1)
     float utotal = Param::GetFloat(Param::utotal);
-    float umax = BmsIO::CorrectVoltage(Param::GetFloat(Param::umax));
-    float umin = BmsIO::CorrectVoltage(Param::GetFloat(Param::umin));
-    float uavg = BmsIO::CorrectVoltage(Param::GetFloat(Param::uavg));
+    float umax = Param::GetFloat(Param::umax);
+    float umin = Param::GetFloat(Param::umin);
+    float uavg = Param::GetFloat(Param::uavg);
     float udelta = umax - umin;
     
     // Copy corrected values to VX1-specific parameters

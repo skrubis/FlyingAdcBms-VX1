@@ -158,20 +158,10 @@ BmsFsm::bmsstate BmsFsm::Run(bmsstate currentState)
    case RUN: {
       // Convert milliamps to amps for comparison
       idleCurrentThreshold = Param::GetInt(Param::idlecurrent) / 1000.0f;
-      float raw_idcavg_run = Param::GetFloat(Param::idcavg);
-      float corrected_idcavg_run;
-      // Correct for 16-bit signed value, misinterpreted due to CAN_SIGNED=0
-      // Gain for idcavg is 0.1 as per canMap->AddRecv(Param::idcavg, pdobase, 32, 16, 0.1);
-      uint16_t misinterpreted_unsigned_word_run = static_cast<uint16_t>(raw_idcavg_run / 0.1f);
-      int16_t signed_word_no_gain_run;
-      if (misinterpreted_unsigned_word_run > 32767) { // Check if original MSB (bit 15) was set
-         signed_word_no_gain_run = static_cast<int16_t>(misinterpreted_unsigned_word_run - 65536);
-      } else {
-         signed_word_no_gain_run = static_cast<int16_t>(misinterpreted_unsigned_word_run);
-      }
-      corrected_idcavg_run = static_cast<float>(signed_word_no_gain_run) * 0.1f;
-
-      if (ABS(corrected_idcavg_run) < idleCurrentThreshold)
+      // With CAN_SIGNED=1, idcavg is correctly interpreted as signed
+      float current = Param::GetFloat(Param::idcavg);
+      
+      if (ABS(current) < idleCurrentThreshold)
       {
          cycles++;
 
@@ -193,20 +183,9 @@ BmsFsm::bmsstate BmsFsm::Run(bmsstate currentState)
       // Check if current is above the idle threshold to return to RUN state
       // Convert milliamps to amps for comparison
       idleCurrentThreshold = Param::GetInt(Param::idlecurrent) / 1000.0f;
-      float raw_idcavg_idle = Param::GetFloat(Param::idcavg);
-      float corrected_idcavg_idle;
-      // Correct for 16-bit signed value, misinterpreted due to CAN_SIGNED=0
-      // Gain for idcavg is 0.1 as per canMap->AddRecv(Param::idcavg, pdobase, 32, 16, 0.1);
-      uint16_t misinterpreted_unsigned_word_idle = static_cast<uint16_t>(raw_idcavg_idle / 0.1f);
-      int16_t signed_word_no_gain_idle;
-      if (misinterpreted_unsigned_word_idle > 32767) { // Check if original MSB (bit 15) was set
-         signed_word_no_gain_idle = static_cast<int16_t>(misinterpreted_unsigned_word_idle - 65536);
-      } else {
-         signed_word_no_gain_idle = static_cast<int16_t>(misinterpreted_unsigned_word_idle);
-      }
-      corrected_idcavg_idle = static_cast<float>(signed_word_no_gain_idle) * 0.1f;
+      float current = Param::GetFloat(Param::idcavg);
 
-      if (ABS(corrected_idcavg_idle) > idleCurrentThreshold)
+      if (ABS(current) > idleCurrentThreshold)
       {
          return RUN;
       }

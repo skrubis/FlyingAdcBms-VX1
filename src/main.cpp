@@ -207,7 +207,7 @@ static void ReadCellVoltages(void)
    else if (Param::GetBool(Param::enable) && (opmode == BmsFsm::RUN || opmode == BmsFsm::IDLE))
    {
       BmsIO::ReadCellVoltages();
-      BmsIO::CorrectAllVoltages(); // Apply voltage correction to all voltage parameters
+      // Voltage correction no longer needed with CAN_SIGNED=1
       // Don't turn off the mux here as it breaks the reading sequence on the master node
    }
    else
@@ -219,8 +219,7 @@ static void ForceSOCFromVoltage()
     // Only execute on master node
     if (!bmsFsm->IsFirst()) return;
 
-    // Ensure voltages are corrected before calculating SOC
-    BmsIO::CorrectAllVoltages();
+    // With CAN_SIGNED=1, voltage values are already correct
     
     // Get umin for SOC calculation and validation
     float umin = Param::GetFloat(Param::umin);

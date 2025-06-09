@@ -51,23 +51,24 @@ void BmsIO::ReadCellVoltages()
          float udc = Param::GetFloat((Param::PARAM_NUM)(Param::u0 + chan));
          float balanceTarget = 0;
 
+         int balanceMode = Param::GetInt(Param::balmode);
          switch (balMode)
          {
          case BAL_ADD: //maximum cell voltage is target when only adding
-            balanceTarget = CorrectVoltage(Param::GetFloat(Param::umax));
+            balanceTarget = Param::GetFloat(Param::umax);
             break;
          case BAL_DIS: //minimum cell voltage is target when only dissipating
-            balanceTarget = CorrectVoltage(Param::GetFloat(Param::umin));
+            balanceTarget = Param::GetFloat(Param::umin);
             break;
          case BAL_BOTH: //average cell voltage is target when dissipating and adding
-            balanceTarget = CorrectVoltage(Param::GetFloat(Param::uavg));
+            balanceTarget = Param::GetFloat(Param::uavg);
             break;
          default: //not balancing
             break;
          }
 
          // Calculate adaptive thresholds based on voltage delta and minimum values
-         float deltaV = CorrectVoltage(Param::GetFloat(Param::umax)) - CorrectVoltage(Param::GetFloat(Param::umin));
+         float deltaV = Param::GetFloat(Param::umax) - Param::GetFloat(Param::umin);
          float chargeThreshold = MAX(3.0f, deltaV * 0.02f);  // At least 3mV or 2% of delta
          float dischargeThreshold = MAX(1.0f, deltaV * 0.01f);  // At least 1mV or 1% of delta
          
@@ -82,9 +83,9 @@ void BmsIO::ReadCellVoltages()
          // Cache values with a timeout mechanism for slave nodes
          if (!bmsFsm->IsFirst()) {
              // Current cached values
-             float currentUmin = CorrectVoltage(Param::GetFloat(Param::umin));
-             float currentUmax = CorrectVoltage(Param::GetFloat(Param::umax));
-             float currentUavg = CorrectVoltage(Param::GetFloat(Param::uavg));
+             float currentUmin = Param::GetFloat(Param::umin);
+             float currentUmax = Param::GetFloat(Param::umax);
+             float currentUavg = Param::GetFloat(Param::uavg);
              
              // Check if values changed significantly (received update from master)
              bool valuesChanged = (ABS(currentUmin - cachedUmin) > 1.0f) || 
@@ -299,91 +300,9 @@ void BmsIO::TestReadCellVoltage(int chan, FlyingAdcBms::BalanceCommand cmd)
    Param::SetFloat((Param::PARAM_NUM)(Param::u0 + chan), udc);
 }
 
-float BmsIO::CorrectVoltage(float value)
-{
-   // Fix sign bit interpretation issue: If value is negative but close to -4096,
-   // it's likely a 13-bit unsigned value incorrectly interpreted as signed
-   if (value < 0 && value > -4096) {
-      // Convert the negative 13-bit value back to positive by adding 2^13
-      return value + 8192.0f;
-   }
-   return value;
-}
+// CorrectVoltage function removed - no longer needed with CAN_SIGNED=1
 
-void BmsIO::CorrectAllVoltages()
-{
-   // Correct all voltage parameters that could be affected by sign bit misinterpretation
-   if (bmsFsm->IsFirst())
-   {
-      // First check global values used for SOC calculation
-      float umin = Param::GetFloat(Param::umin);
-      float umax = Param::GetFloat(Param::umax);
-      float uavg = Param::GetFloat(Param::uavg);
-      float utotal = Param::GetFloat(Param::utotal);
-      
-      // Apply corrections if needed to global values
-      if (umin < 0 && umin > -4096)
-         Param::SetFloat(Param::umin, umin + 8192.0f);
-      
-      if (umax < 0 && umax > -4096)
-         Param::SetFloat(Param::umax, umax + 8192.0f);
-      
-      if (uavg < 0 && uavg > -4096)
-         Param::SetFloat(Param::uavg, uavg + 8192.0f);
-         
-      if (utotal < 0)
-         Param::SetFloat(Param::utotal, utotal + 8192.0f * Param::GetInt(Param::totalcells));
-      
-      // Update VX1-specific parameters with corrected values
-      Param::SetFloat(Param::VX1umin, Param::GetFloat(Param::umin));
-      Param::SetFloat(Param::VX1umax, Param::GetFloat(Param::umax));
-      Param::SetFloat(Param::VX1uavg, Param::GetFloat(Param::uavg));
-      Param::SetFloat(Param::VX1utotal, Param::GetFloat(Param::utotal));
-      Param::SetFloat(Param::VX1udelta, Param::GetFloat(Param::umax) - Param::GetFloat(Param::umin));
-      
-      // Then correct values from all sub-modules
-      for (int i = 1; i < bmsFsm->GetNumberOfModules(); i++)
-      {
-         // Get current values
-         float uavg = Param::GetFloat(bmsFsm->GetDataItem(Param::uavg0, i));
-         float umin = Param::GetFloat(bmsFsm->GetDataItem(Param::umin0, i));
-         float umax = Param::GetFloat(bmsFsm->GetDataItem(Param::umax0, i));
-         
-         // Apply corrections if needed - only for values in the problematic range
-         if (uavg < 0 && uavg > -4096)
-            Param::SetFloat(bmsFsm->GetDataItem(Param::uavg0, i), uavg + 8192.0f);
-         
-         if (umin < 0 && umin > -4096)
-            Param::SetFloat(bmsFsm->GetDataItem(Param::umin0, i), umin + 8192.0f);
-         
-         if (umax < 0 && umax > -4096)
-            Param::SetFloat(bmsFsm->GetDataItem(Param::umax0, i), umax + 8192.0f);
-      }
-   }
-   else
-   {
-      // For sub-modules, correct values received from master
-      float uavg = Param::GetFloat(Param::uavg);
-      float umin = Param::GetFloat(Param::umin);
-      float umax = Param::GetFloat(Param::umax);
-      
-      // Apply corrections if needed
-      if (uavg < 0 && uavg > -4096)
-         Param::SetFloat(Param::uavg, uavg + 8192.0f);
-      
-      if (umin < 0 && umin > -4096)
-         Param::SetFloat(Param::umin, umin + 8192.0f);
-      
-      if (umax < 0 && umax > -4096)
-         Param::SetFloat(Param::umax, umax + 8192.0f);
-      
-      // Update VX1-specific parameters
-      Param::SetFloat(Param::VX1uavg, Param::GetFloat(Param::uavg));
-      Param::SetFloat(Param::VX1umin, Param::GetFloat(Param::umin));
-      Param::SetFloat(Param::VX1umax, Param::GetFloat(Param::umax));
-      Param::SetFloat(Param::VX1udelta, Param::GetFloat(Param::umax) - Param::GetFloat(Param::umin));
-   }
-}
+// CorrectAllVoltages function removed - no longer needed with CAN_SIGNED=1
 
 void BmsIO::Accumulate(float sum, float min, float max, float avg)
 {
@@ -400,9 +319,9 @@ void BmsIO::Accumulate(float sum, float min, float max, float avg)
       for (int i = 1; i < bmsFsm->GetNumberOfModules(); i++)
       {
          //Here we undo the local average calculation on the module to calculate the substrings total voltage
-         float subAvg = CorrectVoltage(Param::GetFloat(bmsFsm->GetDataItem(Param::uavg0, i)));
-         float subMin = CorrectVoltage(Param::GetFloat(bmsFsm->GetDataItem(Param::umin0, i)));
-         float subMax = CorrectVoltage(Param::GetFloat(bmsFsm->GetDataItem(Param::umax0, i)));
+         float subAvg = Param::GetFloat(bmsFsm->GetDataItem(Param::uavg0, i));
+         float subMin = Param::GetFloat(bmsFsm->GetDataItem(Param::umin0, i));
+         float subMax = Param::GetFloat(bmsFsm->GetDataItem(Param::umax0, i));
          
          totalSum += subAvg * bmsFsm->GetCellsOfModule(i);
          totalMin = MIN(totalMin, subMin);
@@ -452,17 +371,16 @@ void BmsIO::Accumulate(float sum, float min, float max, float avg)
       Param::SetFloat(Param::umax0, max);
       Param::SetFloat(Param::udelta, max - min);
       
-      // Always apply correction to values coming from CAN communication
-      // We need to correct both positive and negative values to handle the inconsistent behavior
-      Param::SetFloat(Param::uavg, CorrectVoltage(Param::GetFloat(Param::uavg)));
-      Param::SetFloat(Param::umin, CorrectVoltage(Param::GetFloat(Param::umin)));
-      Param::SetFloat(Param::umax, CorrectVoltage(Param::GetFloat(Param::umax)));
+      // With CAN_SIGNED=1, values from CAN communication are correctly interpreted without correction
+      Param::SetFloat(Param::uavg, Param::GetFloat(Param::uavg));
+      Param::SetFloat(Param::umin, Param::GetFloat(Param::umin));
+      Param::SetFloat(Param::umax, Param::GetFloat(Param::umax));
       
-      // Update VX1-specific parameters (from previous fix)
+      // Update VX1-specific parameters (no correction needed with CAN_SIGNED=1)
       Param::SetFloat(Param::VX1utotal, sum);
-      Param::SetFloat(Param::VX1uavg, CorrectVoltage(Param::GetFloat(Param::uavg)));
-      Param::SetFloat(Param::VX1umin, CorrectVoltage(Param::GetFloat(Param::umin)));
-      Param::SetFloat(Param::VX1umax, CorrectVoltage(Param::GetFloat(Param::umax)));
-      Param::SetFloat(Param::VX1udelta, CorrectVoltage(Param::GetFloat(Param::umax)) - CorrectVoltage(Param::GetFloat(Param::umin)));
+      Param::SetFloat(Param::VX1uavg, Param::GetFloat(Param::uavg));
+      Param::SetFloat(Param::VX1umin, Param::GetFloat(Param::umin));
+      Param::SetFloat(Param::VX1umax, Param::GetFloat(Param::umax));
+      Param::SetFloat(Param::VX1udelta, Param::GetFloat(Param::umax) - Param::GetFloat(Param::umin));
    }
 }
