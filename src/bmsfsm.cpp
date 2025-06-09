@@ -71,8 +71,6 @@ BmsFsm::bmsstate BmsFsm::Run(bmsstate currentState)
 {
    uint32_t data[2] = { 0 };
    uint32_t sdoReply;
-   float idleCurrentThreshold = 0.0f;
-   uint32_t sleepTimeoutCycles = 0;
 
    switch (currentState)
    {
@@ -155,19 +153,18 @@ BmsFsm::bmsstate BmsFsm::Run(bmsstate currentState)
          return ERROR;
       }
       break;
-   case RUN: {
+   case RUN:
+   {
       // Convert milliamps to amps for comparison
-      idleCurrentThreshold = Param::GetInt(Param::idlecurrent) / 1000.0f;
-      // With CAN_SIGNED=1, idcavg is correctly interpreted as signed
-      float current = Param::GetFloat(Param::idcavg);
+      float idleCurrentThreshold = Param::GetInt(Param::idlecurrent) / 1000.0f;
       
-      if (ABS(current) < idleCurrentThreshold)
+      if (ABS(Param::GetFloat(Param::idcavg)) < idleCurrentThreshold)
       {
          cycles++;
 
-         if (cycles > ((uint32_t)Param::GetInt(Param::idlewait) * 10))
+         // idlewait in seconds, cycles are 100ms
+         if (cycles > (uint32_t)(Param::GetInt(Param::idlewait) * 10))
          {
-            cycles = 0;
             return IDLE;
          }
       }
@@ -177,22 +174,22 @@ BmsFsm::bmsstate BmsFsm::Run(bmsstate currentState)
       }
       break;
    }
-   case IDLE: {
+   case IDLE:
+   {
       cycles++;
 
       // Check if current is above the idle threshold to return to RUN state
       // Convert milliamps to amps for comparison
-      idleCurrentThreshold = Param::GetInt(Param::idlecurrent) / 1000.0f;
-      float current = Param::GetFloat(Param::idcavg);
+      float idleCurrentThreshold = Param::GetInt(Param::idlecurrent) / 1000.0f;
 
-      if (ABS(current) > idleCurrentThreshold)
+      if (ABS(Param::GetFloat(Param::idcavg)) > idleCurrentThreshold)
       {
          return RUN;
       }
 
       // Calculate sleep timeout in cycles (100ms per cycle)
       // 3600 cycles = 1 hour, multiply by sleeptimeout parameter (in hours)
-      sleepTimeoutCycles = (uint32_t)(Param::GetFloat(Param::sleeptimeout) * 3600 * 10);
+      uint32_t sleepTimeoutCycles = (uint32_t)(Param::GetFloat(Param::sleeptimeout) * 3600 * 10);
       
       // Turn off after sleep timeout if not enabled
       if (cycles > sleepTimeoutCycles && !IsEnabled())
@@ -200,8 +197,8 @@ BmsFsm::bmsstate BmsFsm::Run(bmsstate currentState)
          DigIo::selfena_out.Clear();
          DigIo::nextena_out.Clear();
       }
-    } // Closes scope for case IDLE
       break;
+   }
    case ERROR:
       if (Param::GetBool(Param::enable))
          return RUN;
@@ -251,17 +248,17 @@ bool BmsFsm::IsEnabled()
 void BmsFsm::MapCanSubmodule()
 {
    int id = pdobase + ourIndex + 1; //main module has two PDO messages
-   canMap->AddSend(Param::umin0, id, 0, 13, 1);
-   canMap->AddSend(Param::umax0, id, 16, 13, 1);
+   canMap->AddSend(Param::umin0, id, 0, 14, 1);
+   canMap->AddSend(Param::umax0, id, 16, 14, 1);
    canMap->AddSend(Param::counter, id, 30, 2, 1);
-   canMap->AddSend(Param::uavg0, id, 32, 13, 1);
-   canMap->AddSend(Param::tempmin0, id, 48, 8, 1, 40);
-   canMap->AddSend(Param::tempmax0, id, 56, 8, 1, 40);
+   canMap->AddSend(Param::uavg0, id, 32, 14, 1);
+   canMap->AddSend(Param::tempmin0, id, 48, 8, 1);
+   canMap->AddSend(Param::tempmax0, id, 56, 8, 1);
 
    canMap->AddRecv(Param::idcavg, pdobase, 32, 16, 0.1);
-   canMap->AddRecv(Param::umin, pdobase + 1, 0, 13, 1);
-   canMap->AddRecv(Param::umax, pdobase + 1, 16, 13, 1);
-   canMap->AddRecv(Param::uavg, pdobase + 1, 32, 13, 1);
+   canMap->AddRecv(Param::umin, pdobase + 1, 0, 14, 1);
+   canMap->AddRecv(Param::umax, pdobase + 1, 16, 14, 1);
+   canMap->AddRecv(Param::uavg, pdobase + 1, 32, 14, 1);
 }
 
 void BmsFsm::MapCanMainmodule()
@@ -269,22 +266,22 @@ void BmsFsm::MapCanMainmodule()
    for (int i = 1; i < GetMaxSubmodules(); i++)
    {
       int id = pdobase + i + 1;
-      canMap->AddRecv(GetDataItem(Param::umin0, i), id, 0, 13, 1);
-      canMap->AddRecv(GetDataItem(Param::umax0, i), id, 16, 13, 1);
-      canMap->AddRecv(GetDataItem(Param::uavg0, i), id, 32, 13, 1);
-      canMap->AddRecv(GetDataItem(Param::tempmin0, i), id, 48, 8, 1, -40);
-      canMap->AddRecv(GetDataItem(Param::tempmax0, i), id, 56, 8, 1, -40);
+      canMap->AddRecv(GetDataItem(Param::umin0, i), id, 0, 14, 1);
+      canMap->AddRecv(GetDataItem(Param::umax0, i), id, 16, 14, 1);
+      canMap->AddRecv(GetDataItem(Param::uavg0, i), id, 32, 14, 1);
+      canMap->AddRecv(GetDataItem(Param::tempmin0, i), id, 48, 8, 1);
+      canMap->AddRecv(GetDataItem(Param::tempmax0, i), id, 56, 8, 1);
    }
 
    int id = Param::GetInt(Param::pdobase);
 
    //we don't expose our local accumulated values but the "global" ones
-   canMap->AddSend(Param::umin, id + 1, 0, 13, 1);
-   canMap->AddSend(Param::umax, id + 1, 16, 13, 1);
+   canMap->AddSend(Param::umin, id + 1, 0, 14, 1);
+   canMap->AddSend(Param::umax, id + 1, 16, 14, 1);
    canMap->AddSend(Param::counter, id + 1, 30, 2, 1);
-   canMap->AddSend(Param::uavg, id + 1, 32, 13, 1);
-   canMap->AddSend(Param::tempmin, id + 1, 48, 8, 1, 40);
-   canMap->AddSend(Param::tempmax, id + 1, 56, 8, 1, 40);
+   canMap->AddSend(Param::uavg, id + 1, 32, 14, 1);
+   canMap->AddSend(Param::tempmin, id + 1, 48, 8, 1);
+   canMap->AddSend(Param::tempmax, id + 1, 56, 8, 1);
 
    canMap->AddSend(Param::chargelim, id, 0, 11, 1);
    canMap->AddSend(Param::dischargelim, id, 11, 11, 1);

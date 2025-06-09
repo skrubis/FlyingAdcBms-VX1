@@ -41,7 +41,6 @@
 
 uint8_t FlyingAdcBms::selectedChannel = 0;
 uint8_t FlyingAdcBms::previousChannel = 0;
-uint8_t FlyingAdcBms::balancerPins = 0;
 uint8_t FlyingAdcBms::i2cdelay = 30;
 static bool lock = false;
 
@@ -101,7 +100,8 @@ void FlyingAdcBms::SelectChannel(uint8_t channel)
    selectedChannel = channel;
 
    //This creates some delay between switching channels
-   SendRecvI2C(DIO_ADDR, READ, &balancerPins, 1);
+   uint8_t tempPins;
+   SendRecvI2C(DIO_ADDR, READ, &tempPins, 1);
    SetBalancing(BAL_OFF);
 
    //Example Chan8:  turn on G8 (=even mux word 4) and G9 (odd mux word 4)
@@ -112,7 +112,7 @@ void FlyingAdcBms::SelectChannel(uint8_t channel)
    gpio_set(GPIOB, evenMuxWord | oddMuxWord | GPIO7);
 
    //More delay for low pass to settle
-   SendRecvI2C(DIO_ADDR, READ, &balancerPins, 1);
+   SendRecvI2C(DIO_ADDR, READ, &tempPins, 1);
 }
 #endif // V1HW
 
@@ -139,6 +139,7 @@ FlyingAdcBms::BalanceStatus FlyingAdcBms::SetBalancing(BalanceCommand cmd)
 {
    BalanceStatus stt = STT_OFF;
    uint8_t data[2];
+   uint8_t currentPins = 0;
 
    data[0] = 0x1; //output port register
 
@@ -159,7 +160,10 @@ FlyingAdcBms::BalanceStatus FlyingAdcBms::SetBalancing(BalanceCommand cmd)
       stt = selectedChannel & 1 ? STT_CHARGENEG : STT_CHARGEPOS;
    }
 
-   if (data[1] != balancerPins)
+   // Read current pins state
+   SendRecvI2C(DIO_ADDR, READ, &currentPins, 1);
+   
+   if (data[1] != currentPins)
       SendRecvI2C(DIO_ADDR, WRITE, data, 2);
 
    return stt;

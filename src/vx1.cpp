@@ -2395,7 +2395,7 @@ bool VX1::SendFirmwareRevisionPgn(CanHardware* canHardware, uint8_t sourceAddres
  */
 void VX1::SyncBmsToVX1Parameters()
 {
-    // Get voltage values directly from BMS parameters (no correction needed with CAN_SIGNED=1)
+    // Get voltage values from BMS parameters
     float utotal = Param::GetFloat(Param::utotal);
     float umax = Param::GetFloat(Param::umax);
     float umin = Param::GetFloat(Param::umin);
@@ -2411,7 +2411,7 @@ void VX1::SyncBmsToVX1Parameters()
     
     // Note: We don't have a VX1soc parameter, but SOC is shared using standard CAN message
     
-    // Copy temperature values (these don't need correction)
+    // Copy temperature values
     Param::SetFloat(Param::VX1tempmin, Param::GetFloat(Param::tempmin));
     Param::SetFloat(Param::VX1tempmax, Param::GetFloat(Param::tempmax));
 }

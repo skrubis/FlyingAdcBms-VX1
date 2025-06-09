@@ -104,7 +104,7 @@ static void CalculateSocSoh(BmsFsm::bmsstate stt, BmsFsm::bmsstate laststt)
          /* Remember SoC at the point of this estimation
             in order to be prepared for the next estimation */
          estimatedSocAtValidSoh = estimatedSoc;
-         BmsAlgo::SetNominalCapacity(Param::GetFloat(Param::nomcap) * soh / 100.0f);
+         //BmsAlgo::SetNominalCapacity(Param::GetFloat(Param::nomcap) * soh / 100.0f);
       }
    }
 
@@ -207,7 +207,6 @@ static void ReadCellVoltages(void)
    else if (Param::GetBool(Param::enable) && (opmode == BmsFsm::RUN || opmode == BmsFsm::IDLE))
    {
       BmsIO::ReadCellVoltages();
-      // Voltage correction no longer needed with CAN_SIGNED=1
       // Don't turn off the mux here as it breaks the reading sequence on the master node
    }
    else
@@ -341,6 +340,7 @@ extern "C" int main(void)
 
    s.AddTask(BmsIO::MeasureCurrent, 5);
    s.AddTask(ReadCellVoltages, 25);
+   s.AddTask(BmsIO::SwitchMux, 2); //This must added after ReadCellVoltages() to avoid an additional 2 ms delay
    s.AddTask(Ms100Task, 100);
    
    // Initialize BMS CAN messaging static pointers
