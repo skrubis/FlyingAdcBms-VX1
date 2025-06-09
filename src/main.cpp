@@ -48,6 +48,7 @@
 #define PRINT_JSON 0
 
 static Stm32Scheduler* scheduler;
+static Stm32Scheduler* schedulerTIM4; // For TIM4
 static CanMap* canMapExternal;
 static CanMap* canMapInternal;
 static BmsFsm* bmsFsm;
@@ -299,6 +300,14 @@ extern "C" void tim2_isr(void)
    scheduler->Run();
 }
 
+extern "C" void tim4_isr(void)
+{
+   if (schedulerTIM4)
+   {
+      schedulerTIM4->Run();
+   }
+}
+
 extern "C" int main(void)
 {
    clock_setup(); //Must always come first
@@ -321,6 +330,9 @@ extern "C" int main(void)
 
    Stm32Scheduler s(TIM2); //We never exit main so it's ok to put it on stack
    scheduler = &s;
+
+   Stm32Scheduler sTIM4(TIM4); // Instantiate scheduler for TIM4
+   schedulerTIM4 = &sTIM4;
    //Initialize CAN1 with baud rate based on VX1 mode
    VX1::Initialize();
    Stm32Can c(CAN1, VX1::GetCanBaudRate());
@@ -345,7 +357,7 @@ extern "C" int main(void)
    
    // Initialize BMS CAN messaging static pointers
    VX1::InitBmsCanMessaging(&c, &fsm);
-   s.AddTask(VX1::BmsCanMessagingTask, 10); // Run BMS CAN messaging every 10ms
+   sTIM4.AddTask(VX1::BmsCanMessagingTask, 10); // Run BMS CAN messaging every 10ms on TIM4 scheduler
 
    Param::SetInt(Param::hwrev, hwRev);
    Param::SetInt(Param::version, 4);

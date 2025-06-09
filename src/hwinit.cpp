@@ -50,6 +50,7 @@ void clock_setup(void)
    rcc_periph_clock_enable(RCC_GPIOC);
    rcc_periph_clock_enable(RCC_USART3);
    rcc_periph_clock_enable(RCC_TIM2); //Scheduler
+   rcc_periph_clock_enable(RCC_TIM4); //Scheduler for CAN Messaging Task
    rcc_periph_clock_enable(RCC_DMA1);  //ADC
    rcc_periph_clock_enable(RCC_ADC1);
    rcc_periph_clock_enable(RCC_CRC);
@@ -115,8 +116,14 @@ void write_bootloader_pininit()
 */
 void nvic_setup(void)
 {
-   nvic_enable_irq(NVIC_TIM2_IRQ); //Scheduler
-   nvic_set_priority(NVIC_TIM2_IRQ, 0); //highest priority
+   nvic_enable_irq(NVIC_TIM2_IRQ); //Scheduler for TIM2
+   nvic_set_priority(NVIC_TIM2_IRQ, 0);
+
+   nvic_enable_irq(NVIC_TIM4_IRQ); //Scheduler for TIM4
+   nvic_set_priority(NVIC_TIM4_IRQ, 0); // Set priority same as TIM2 or adjust as needed
+
+   //CAN RX IRQ
+   nvic_enable_irq(NVIC_USB_LP_CAN_RX0_IRQ);
 }
 
 void rtc_setup()

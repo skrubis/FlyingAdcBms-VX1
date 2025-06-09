@@ -2365,7 +2365,7 @@ bool VX1::SendFirmwareRevisionPgn(CanHardware* canHardware, uint8_t sourceAddres
     // Create the data array for the message
     uint8_t data[8] = {0};
     
-    // Set the firmware revision string "FRA24C06" as per spec
+    // Set the firmware revision string as per spec
     data[0] = 'O';
     data[1] = 'I';
     data[2] = 'B';
@@ -2373,7 +2373,7 @@ bool VX1::SendFirmwareRevisionPgn(CanHardware* canHardware, uint8_t sourceAddres
     data[4] = 'S';
     data[5] = '0';
     data[6] = '2';
-    data[7] = '5';
+    data[7] = '6';
     
     // Construct the CAN ID: 00 (priority 0, highest) + PGN (0xFEDA) + source address
     uint32_t canId = 0x00FEDA00 | sourceAddress;
