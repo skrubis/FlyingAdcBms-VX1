@@ -450,6 +450,9 @@ private:
     static bool uDeltaWarningActive;
     static float currentUDeltaWarning;
     
+    // Clock stats display timing
+    static uint32_t lastClockStatsUpdateTime;
+    
     // Vehicle data from PGN FEF1h
     static float vehicleSpeed;     // Current speed in km/h
     static float busVoltage;       // Bus voltage in V

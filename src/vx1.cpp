@@ -79,6 +79,9 @@ float VX1::currentTempWarning = 0.0f;
 bool VX1::uDeltaWarningActive = false;
 float VX1::currentUDeltaWarning = 0.0f;
 
+// Clock stats display timing
+uint32_t VX1::lastClockStatsUpdateTime = 0;
+
 // Vehicle data from PGN FEF1h
 float VX1::vehicleSpeed = 0.0f;     // Current speed in km/h
 float VX1::busVoltage = 0.0f;       // Bus voltage in V
@@ -106,13 +109,13 @@ uint32_t VX1::lastCalculationTime = 0; // Last time consumption was calculated
 
 // J1939 PGN for vehicle data messages
 #define VX1_VEHICLE_DATA_PGN 0x00FEF1
-#define VX1_VEHICLE_DATA_SA 0x05
-#define VX1_VEHICLE_DATA_ID 0x18FEF105
+#define VX1_VEHICLE_SA 0x05
+#define VX1_VEHICLE_DATA_ID 0x00FEF105 // Priority 0 (0x00), PGN 0xFEF1, SA 0x05
 
 // J1939 PGN for Motor Controller temperature data messages
 #define VX1_MC_TEMP_PGN 0x00FF05
 #define VX1_MC_SA 0x05
-#define VX1_MC_TEMP_ID 0x18FF0505  // Priority 3 (0x18), PGN 0xFF05, SA 0x05
+#define VX1_MC_TEMP_ID 0x00FF0505  // Priority 0 (0x00), PGN 0xFF05, SA 0x05
 
 // BMS PGN definitions
 #define VX1_BMS_STATUS_PGN 0x00FEF2 // BMS Status & Control
@@ -527,19 +530,36 @@ void VX1::TelltaleDisplayTask(CanHardware* canHardware, bool masterOnly)
  * @param segment4 Fourth segment from right
  * @param chargerIndicator Charger indicator character (default 0x00 = none)
  */
+// Global variable for tracking if the clock display needs to force a new frame
+static bool g_resetClockFirstFrame = true;
+
 void VX1::SetClockDisplay(char segment1, char segment2, char segment3, char segment4, char chargerIndicator)
 {
-    // Set the clock segments
-    clockSegments[0] = segment1;
-    clockSegments[1] = segment2;
-    clockSegments[2] = segment3;
-    clockSegments[3] = segment4;
-    clockSegments[4] = '\0'; // Ensure null termination
+    // Check if display content is changing
+    bool contentChanged = false;
     
-    // Set the charger indicator
+    if (clockSegments[0] != segment4 || 
+        clockSegments[1] != segment3 || 
+        clockSegments[2] != segment2 || 
+        clockSegments[3] != segment1 || 
+        clockChargerIndicator != chargerIndicator) {
+        contentChanged = true;
+    }
+    
+    // Store the segment values in the static class variable
+    clockSegments[0] = segment4; // Leftmost digit
+    clockSegments[1] = segment3;
+    clockSegments[2] = segment2;
+    clockSegments[3] = segment1; // Rightmost digit
     clockChargerIndicator = chargerIndicator;
     
+    // Mark the display as active
     clockActive = true;
+    
+    // Reset first frame flag when content changes to ensure 0xAA is sent once
+    if (contentChanged) {
+        g_resetClockFirstFrame = true;
+    }
 }
 
 /**
@@ -553,6 +573,15 @@ void VX1::SetClockDisplay(char segment1, char segment2, char segment3, char segm
  */
 bool VX1::SendClockMessage(CanHardware* canHardware, uint8_t sourceAddress, bool masterOnly, bool override)
 {
+    // Static flag to track first frame - only first frame should use FORCE override
+    static bool firstFrame = true;
+    
+    // Check if we need to reset the first frame flag
+    if (g_resetClockFirstFrame) {
+        firstFrame = true;
+        g_resetClockFirstFrame = false;
+    }
+    
     // Check if VX1 mode is enabled, VX1enCanMsg is set to 1, and we have a valid CAN interface
     if (!IsEnabled() || !canHardware || Param::GetInt(Param::VX1enCanMsg) != 1)
         return false;
@@ -606,10 +635,19 @@ bool VX1::SendClockMessage(CanHardware* canHardware, uint8_t sourceAddress, bool
     data[1] = segmentCodes[1];
     data[2] = segmentCodes[2];
     data[3] = segmentCodes[3]; // Leftmost digit
-    data[4] = 0x00;           // Empty segment 5
-    data[5] = 0x00;           // Empty segment 6
+    data[4] = 0xFF;           // Empty segment 5 - OEM dash expects 0xFF padding
+    data[5] = 0xFF;           // Empty segment 6 - OEM dash expects 0xFF padding
     data[6] = clockChargerIndicator; // Charger indicator
-    data[7] = override ? VX1_OVERRIDE_FORCE : VX1_OVERRIDE_NORMAL; // Override control
+    
+    // Only use FORCE override (0xAA) for the first frame, then use NORMAL (0x55)
+    // OEM dash expects 0xAA only once to seize the bus, then 0x55 for keep-alives
+    // Holding 0xAA for ≥ 15s triggers the cluster's CAN-watchdog and causes a reboot
+    if (override && firstFrame) {
+        data[7] = VX1_OVERRIDE_FORCE;  // 0xAA - force display (first frame only)
+        firstFrame = false;
+    } else {
+        data[7] = VX1_OVERRIDE_NORMAL; // 0x55 - normal keep-alive
+    }
     
     // Calculate the J1939 29-bit ID
     // Format: Priority (3 bits) | PGN (18 bits) | Source Address (8 bits)
@@ -1095,8 +1133,10 @@ void VX1::CheckAndInitBootDisplay(CanHardware* canHardware, Stm32Scheduler* sche
  * 
  * This function checks if conditions are met to display stats on the clock display:
  * - VX1mode must be 1 (enabled)
+ * - This is the master node
  * - VX1LCDClockStats must be 1 (always) or 2 (only when idle)
  * - If VX1LCDClockStats is 2, idlecurrent > idcavg must be true
+ * - Respects VX1msgInterval to avoid overloading the dash
  * 
  * @param canHardware Pointer to the CAN hardware interface
  * @param bmsFsm Pointer to the BmsFsm instance for master node detection
@@ -1109,6 +1149,27 @@ void VX1::ClockStatsDisplayTask(CanHardware* canHardware, BmsFsm* bmsFsm)
     
     // Basic checks for VX1 mode and master node
     if (!IsEnabled() || !IsMaster(bmsFsm) || Param::GetInt(Param::VX1enCanMsg) != 1)
+        return;
+        
+    // Skip if clockActive is true to avoid conflicts with ClockDisplayTask
+    // This prevents double-sending from two different tasks
+    if (clockActive)
+        return;
+    
+    // This function is called from Ms100Task, which is called every 100ms
+    // Send messages every 10 calls (once per second) to avoid overloading the dash
+    static uint8_t msgCounter = 0;
+    
+    // Default to 1000ms (once per second) to avoid overloading the dash
+    // Only honor the VX1msgInterval parameter if it's greater than 1000ms
+    uint32_t msgInterval = Param::GetInt(Param::VX1msgInterval);
+    uint8_t sendRate = msgInterval > 1000 ? (msgInterval / 100) : 10;
+    
+    // Safety check
+    if (sendRate < 1) sendRate = 1;
+    
+    // Only send every N calls
+    if ((++msgCounter % sendRate) != 0)
         return;
     
     // Check if clock stats display is enabled

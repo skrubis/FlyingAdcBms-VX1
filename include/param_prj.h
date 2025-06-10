@@ -110,7 +110,7 @@
     PARAM_ENTRY(CAT_VX1_CAN,     VX1EmulateBMSmsg, "0=off, 1=on",   0,      1 ,      1,      162 ) \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1kWhResetDist, "km",   0.1,    20,      5,      163 ) \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1TempWarnHiPoint, "°C",     40,     80,     55,     164 ) \
-    PARAM_ENTRY(CAT_VX1_CAN,     VX1TempWarnLoPoint, "°C",     40,     80,     0,     165 ) \
+    PARAM_ENTRY(CAT_VX1_CAN,     VX1TempWarnLoPoint, "°C",     -25,    40,     0,     165 ) \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1mockTemp, "°C",     -20,    55,     24,     167 ) \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1ModuleNumber, "1-15",     1,     15,     1,     168 ) \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1SendFirmwareRevision, "0=off, 1=on",   0,      1 ,      1,      169 ) \
