@@ -147,6 +147,8 @@ static void Ms100Task(void)
        VX1::TemperatureWarningTask(canMapExternal->GetHardware(), bmsFsm);
        VX1::UDeltaWarningTask(canMapExternal->GetHardware(), bmsFsm);
        VX1::ClockStatsDisplayTask(canMapExternal->GetHardware(), bmsFsm);
+       // Disabled odometer right keep-alive as it's no longer needed and shows garbage characters
+       // VX1::OdoRightKeepAlive(canMapExternal->GetHardware());
    }
    
    if (Param::GetInt(Param::opmode) != BmsFsm::ERROR)

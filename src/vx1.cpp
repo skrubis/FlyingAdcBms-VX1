@@ -65,6 +65,9 @@ uint32_t VX1::lastTelltaleUpdateTime = 0;
 char VX1::clockSegments[5] = "    "; // Initialize with spaces
 char VX1::clockChargerIndicator = 0x00;
 bool VX1::clockActive = false;
+bool VX1::bootDisplayInitialized = false;
+
+// Using VX1_OVERRIDE_FORCE (0xAA) for all messages to ensure displays remain visible
 
 // Error reporting states
 bool VX1::errorActive = false;
@@ -428,12 +431,15 @@ bool VX1::SendOdometerMessage(const char* message, CanHardware* canHardware, uin
     bytes[4] = CharToSegment(odometerMessage[1]);
     bytes[5] = CharToSegment(odometerMessage[0]); // Left-most character
     bytes[6] = 0x00;               // Charger active indicator (off)
-    bytes[7] = VX1_OVERRIDE_FORCE; // Override control (force display)
+    // Always use 0xAA (VX1_OVERRIDE_FORCE) to ensure display remains visible
+    bytes[7] = VX1_OVERRIDE_FORCE;
+    // No longer using odometerFirstFrame flag since we always use FORCE mode
+    //odometerFirstFrame = false;
     
     // Calculate the J1939 29-bit ID
     // Format: Priority (3 bits) | PGN (18 bits) | Source Address (8 bits)
-    // Priority 3 (0b011) << 26 | PGN 0x00FEED << 8 | Source Address
-    uint32_t j1939Id = (3 << 26) | (VX1_ODOMETER_PGN << 8) | sourceAddress;
+    // Use BuildDisplayId helper with priority 3 for odometer messages
+    uint32_t j1939Id = BuildDisplayId(VX1_ODOMETER_PGN, sourceAddress, 3); // Priority 3 for odometer
     
     // Send the message
     canHardware->Send(j1939Id, data, 8);
@@ -461,11 +467,11 @@ void VX1::OdometerDisplayTask(CanHardware* canHardware, bool masterOnly)
         clearData[7] = VX1_OVERRIDE_NORMAL; // Use normal override to allow other messages
         
         // Send clear message to the odometer display
-        uint32_t j1939Id = (3 << 26) | (VX1_ODOMETER_PGN << 8) | 0x80;
+        uint32_t j1939Id = BuildDisplayId(VX1_ODOMETER_PGN, 0x80, 3); // Priority 3 for odometer
         canHardware->Send(j1939Id, clearData, 8);
         
-        // Also try with a different source address to ensure it gets cleared
-        j1939Id = (3 << 26) | (VX1_ODOMETER_PGN << 8) | 0xF9;
+        // Also try with diagnostic source address
+        j1939Id = BuildDisplayId(VX1_ODOMETER_PGN, 0xF9, 3); // Priority 3 for odometer
         canHardware->Send(j1939Id, clearData, 8);
         
         return;
@@ -530,36 +536,20 @@ void VX1::TelltaleDisplayTask(CanHardware* canHardware, bool masterOnly)
  * @param segment4 Fourth segment from right
  * @param chargerIndicator Charger indicator character (default 0x00 = none)
  */
-// Global variable for tracking if the clock display needs to force a new frame
-static bool g_resetClockFirstFrame = true;
-
 void VX1::SetClockDisplay(char segment1, char segment2, char segment3, char segment4, char chargerIndicator)
 {
-    // Check if display content is changing
-    bool contentChanged = false;
+    // Set the clock segments
+    clockSegments[0] = segment1;
+    clockSegments[1] = segment2;
+    clockSegments[2] = segment3;
+    clockSegments[3] = segment4;
+    clockSegments[4] = '\0'; // Ensure null termination
     
-    if (clockSegments[0] != segment4 || 
-        clockSegments[1] != segment3 || 
-        clockSegments[2] != segment2 || 
-        clockSegments[3] != segment1 || 
-        clockChargerIndicator != chargerIndicator) {
-        contentChanged = true;
-    }
-    
-    // Store the segment values in the static class variable
-    clockSegments[0] = segment4; // Leftmost digit
-    clockSegments[1] = segment3;
-    clockSegments[2] = segment2;
-    clockSegments[3] = segment1; // Rightmost digit
+    // Set the charger indicator
     clockChargerIndicator = chargerIndicator;
     
-    // Mark the display as active
     clockActive = true;
-    
-    // Reset first frame flag when content changes to ensure 0xAA is sent once
-    if (contentChanged) {
-        g_resetClockFirstFrame = true;
-    }
+    firstFrame = true; // Force override on next message
 }
 
 /**
@@ -571,17 +561,8 @@ void VX1::SetClockDisplay(char segment1, char segment2, char segment3, char segm
  * @param override Override control (default true = 0xAA to force display)
  * @return true if message was sent successfully
  */
-bool VX1::SendClockMessage(CanHardware* canHardware, uint8_t sourceAddress, bool masterOnly, bool override)
+bool VX1::SendClockMessage(CanHardware* canHardware, uint8_t sourceAddress, bool masterOnly)
 {
-    // Static flag to track first frame - only first frame should use FORCE override
-    static bool firstFrame = true;
-    
-    // Check if we need to reset the first frame flag
-    if (g_resetClockFirstFrame) {
-        firstFrame = true;
-        g_resetClockFirstFrame = false;
-    }
-    
     // Check if VX1 mode is enabled, VX1enCanMsg is set to 1, and we have a valid CAN interface
     if (!IsEnabled() || !canHardware || Param::GetInt(Param::VX1enCanMsg) != 1)
         return false;
@@ -635,24 +616,16 @@ bool VX1::SendClockMessage(CanHardware* canHardware, uint8_t sourceAddress, bool
     data[1] = segmentCodes[1];
     data[2] = segmentCodes[2];
     data[3] = segmentCodes[3]; // Leftmost digit
-    data[4] = 0xFF;           // Empty segment 5 - OEM dash expects 0xFF padding
-    data[5] = 0xFF;           // Empty segment 6 - OEM dash expects 0xFF padding
+    data[4] = 0xFF;           // OEM padding - MUST be 0xFF for OEM dash
+    data[5] = 0xFF;           // OEM padding - MUST be 0xFF for OEM dash
     data[6] = clockChargerIndicator; // Charger indicator
+    // Always use 0xAA (VX1_OVERRIDE_FORCE) to ensure display remains visible
+    data[7] = VX1_OVERRIDE_FORCE;
+    // No longer using firstFrame flag since we always use FORCE mode
+    //firstFrame = false;
     
-    // Only use FORCE override (0xAA) for the first frame, then use NORMAL (0x55)
-    // OEM dash expects 0xAA only once to seize the bus, then 0x55 for keep-alives
-    // Holding 0xAA for ≥ 15s triggers the cluster's CAN-watchdog and causes a reboot
-    if (override && firstFrame) {
-        data[7] = VX1_OVERRIDE_FORCE;  // 0xAA - force display (first frame only)
-        firstFrame = false;
-    } else {
-        data[7] = VX1_OVERRIDE_NORMAL; // 0x55 - normal keep-alive
-    }
-    
-    // Calculate the J1939 29-bit ID
-    // Format: Priority (3 bits) | PGN (18 bits) | Source Address (8 bits)
-    // Priority 3 (0b011) << 26 | PGN 0x00FEEC << 8 | Source Address
-    uint32_t j1939Id = (3 << 26) | (VX1_CLOCK_PGN << 8) | sourceAddress;
+    // Use the helper function to build a consistent CAN ID
+    uint32_t j1939Id = BuildDisplayId(VX1_CLOCK_PGN, sourceAddress);
     
     // Send the message
     canHardware->Send(j1939Id, data, 8);
@@ -673,7 +646,7 @@ void VX1::ClockDisplayTask(CanHardware* canHardware, bool masterOnly)
     // If masterOnly is true, also check if this is the master node
     if (clockActive && IsEnabled() && (!masterOnly || IsMaster()))
     {
-        SendClockMessage(canHardware, 0xF9, masterOnly, true);
+        SendClockMessage(canHardware, 0xF9, masterOnly);
     }
 }
 
@@ -1125,7 +1098,37 @@ void VX1::CheckAndInitBootDisplay(CanHardware* canHardware, Stm32Scheduler* sche
     {
         bootDisplayInitialized = true;
         DisplayBootWelcomeScreen(canHardware, scheduler, bmsFsm);
-    }
+    }  
+}
+
+/**
+ * Send the odometer right display keep-alive message (PGN 0xFEEE)
+ * 
+ * This function should be called every 100ms to prevent dashboard timeouts.
+ * It sends a blank display with override byte 0xAA on first frame, then 0x55.
+ * 
+ * @param canHardware Pointer to the CAN hardware interface
+ */
+void VX1::OdoRightKeepAlive(CanHardware* canHardware)
+{
+    // Check if VX1 mode is enabled and CAN messages are enabled
+    if (!IsEnabled() || Param::GetInt(Param::VX1enCanMsg) != 1 || !canHardware)
+        return;
+    
+    // Prepare a blank data packet for the right odometer display
+    uint8_t data[8] = {0}; // All zeros = blank display
+    
+    // OEM required padding bytes
+    data[4] = 0xFF;
+    data[5] = 0xFF;
+    
+    // Always use 0xAA (VX1_OVERRIDE_FORCE) to ensure display remains visible
+    data[7] = VX1_OVERRIDE_FORCE;
+    // No longer using odoRightFirstFrame flag since we always use FORCE mode
+    //odoRightFirstFrame = false;
+    
+    // Send the message with PGN 0xFEEE and source address 0xF9 using priority 0
+    canHardware->Send(BuildDisplayId(0xFEEE, 0xF9), data, 8);
 }
 
 /**
@@ -1143,17 +1146,16 @@ void VX1::CheckAndInitBootDisplay(CanHardware* canHardware, Stm32Scheduler* sche
  */
 void VX1::ClockStatsDisplayTask(CanHardware* canHardware, BmsFsm* bmsFsm)
 {
+    // If the main clock display is active, do not send stats
+    if (clockActive)
+        return;
+
     // Check if we have a valid CAN interface
     if (!canHardware)
         return;
     
     // Basic checks for VX1 mode and master node
     if (!IsEnabled() || !IsMaster(bmsFsm) || Param::GetInt(Param::VX1enCanMsg) != 1)
-        return;
-        
-    // Skip if clockActive is true to avoid conflicts with ClockDisplayTask
-    // This prevents double-sending from two different tasks
-    if (clockActive)
         return;
     
     // This function is called from Ms100Task, which is called every 100ms
@@ -1179,14 +1181,16 @@ void VX1::ClockStatsDisplayTask(CanHardware* canHardware, BmsFsm* bmsFsm)
     if (clockStatsMode == 0) {
         // Create empty message to clear the display
         uint8_t clearData[8] = {0};
-        clearData[7] = VX1_OVERRIDE_NORMAL; // Use normal override to allow other messages
+        clearData[4] = 0xFF; // OEM required padding
+        clearData[5] = 0xFF; // OEM required padding
+        clearData[7] = VX1_OVERRIDE_FORCE; // Use force override to ensure display is cleared
         
         // Send clear message to the clock display
-        uint32_t j1939Id = (3 << 26) | (VX1_CLOCK_PGN << 8) | 0xF9;
+        uint32_t j1939Id = BuildDisplayId(VX1_CLOCK_PGN, 0xF9);
         canHardware->Send(j1939Id, clearData, 8);
         
         // Also try with a different source address to ensure it gets cleared
-        j1939Id = (3 << 26) | (VX1_CLOCK_PGN << 8) | 0x80;
+        j1939Id = BuildDisplayId(VX1_CLOCK_PGN, 0x80);
         canHardware->Send(j1939Id, clearData, 8);
         
         return;
@@ -1476,13 +1480,14 @@ void VX1::ClockStatsDisplayTask(CanHardware* canHardware, BmsFsm* bmsFsm)
         }
     }
     
-    data[4] = 0x00; // Empty segment 5
-    data[5] = 0x00; // Empty segment 6
+    data[4] = 0xFF; // OEM required padding
+    data[5] = 0xFF; // OEM required padding
     data[6] = 0x00; // No charger indicator
-    data[7] = VX1_OVERRIDE_FORCE; // Force display
+    // The OEM dash immediately drops frames sent with 0x55, so always use FORCE
+    data[7] = VX1_OVERRIDE_FORCE; // 0xAA to keep stats visible
     
-    // Calculate the J1939 29-bit ID for clock display (PGN 0xFEEC)
-    uint32_t j1939Id = (3 << 26) | (VX1_CLOCK_PGN << 8) | 0xF9;
+    // Use the helper function to build a consistent CAN ID for clock display (PGN 0xFEEC)
+    uint32_t j1939Id = BuildDisplayId(VX1_CLOCK_PGN, 0xF9);
     
     // Send the message directly to CAN bus
     canHardware->Send(j1939Id, data, 8);
@@ -1563,7 +1568,8 @@ bool VX1::SendTelltaleControl(
     
     // Create the CAN message
     CANMessage msg;
-    msg.id = 0x18FECA4C; // Fixed ID for telltale messages
+    // Use the helper function for consistent CAN ID construction
+    msg.id = BuildDisplayId(0xFECA, 0x4C); // Telltale message ID
     memset(msg.data, 0, sizeof(msg.data));
     
     // Apply wrench state
@@ -1695,7 +1701,7 @@ void VX1::ErrorReportingTask(CanHardware* canHardware, BmsFsm* /*unused*/)
         telltaleData[6] = 0x32;  // Additional data needed for blinking
         
         // Send telltale message to CAN bus (standard telltale ID)
-        uint32_t telltaleId = 0x18FECA4C;
+        uint32_t telltaleId = BuildDisplayId(0xFECA, 0x4C);
         canHardware->Send(telltaleId, telltaleData, 8);
         
         // --- LCD MESSAGES ---
@@ -1728,7 +1734,7 @@ void VX1::ErrorReportingTask(CanHardware* canHardware, BmsFsm* /*unused*/)
 
         // Turn off telltales
         uint8_t telltaleData[8] = {0}; // All zeros to turn off telltales
-        uint32_t telltaleId = 0x18FECA4C;
+        uint32_t telltaleId = BuildDisplayId(0xFECA, 0x4C);
         canHardware->Send(telltaleId, telltaleData, 8);
         
         // Clear the odometer message (only if no other warnings are active)
@@ -1809,7 +1815,7 @@ void VX1::TemperatureWarningTask(CanHardware* canHardware, BmsFsm* /*unused*/)
         telltaleData[6] = 0x32;  // Additional data needed for blinking
         
         // Send telltale message to CAN bus (standard telltale ID)
-        uint32_t telltaleId = 0x18FECA4C;
+        uint32_t telltaleId = BuildDisplayId(0xFECA, 0x4C);
         canHardware->Send(telltaleId, telltaleData, 8);
         
         // --- LCD MESSAGES ---
@@ -1843,12 +1849,14 @@ void VX1::TemperatureWarningTask(CanHardware* canHardware, BmsFsm* /*unused*/)
             // Turn off telltale
             SetTelltaleState(TelltaleType::BATTERY, TelltaleState::OFF);
             uint8_t telltaleData[8] = {0};
-            canHardware->Send(0x18FECA4C, telltaleData, 8);
+            canHardware->Send(BuildDisplayId(0xFECA, 0x4C), telltaleData, 8);
             
             // Clear LCD
             uint8_t clearData[8] = {0};
+            clearData[4] = 0xFF; // OEM required padding
+            clearData[5] = 0xFF; // OEM required padding
             clearData[7] = VX1_OVERRIDE_FORCE;
-            canHardware->Send((3 << 26) | (VX1_ODOMETER_PGN << 8) | 0x80, clearData, 8);
+            canHardware->Send(BuildDisplayId(VX1_ODOMETER_PGN, 0x80, 3), clearData, 8); // Priority 3 for odometer
         }
     }
     
@@ -1966,7 +1974,7 @@ void VX1::UDeltaWarningTask(CanHardware* canHardware, BmsFsm* /*unused*/)
         telltaleData[0] |= 0x01; // 01 in bits 1-0 for solid ON wrench light
         
         // Send telltale message to CAN bus (standard telltale ID)
-        uint32_t telltaleId = 0x18FECA4C;
+        uint32_t telltaleId = BuildDisplayId(0xFECA, 0x4C);
         canHardware->Send(telltaleId, telltaleData, 8);
         
         // --- LCD MESSAGES ---
@@ -2000,12 +2008,14 @@ void VX1::UDeltaWarningTask(CanHardware* canHardware, BmsFsm* /*unused*/)
             // Turn off telltale
             SetTelltaleState(TelltaleType::WRENCH, TelltaleState::OFF);
             uint8_t telltaleData[8] = {0};
-            canHardware->Send(0x18FECA4C, telltaleData, 8);
+            canHardware->Send(BuildDisplayId(0xFECA, 0x4C), telltaleData, 8);
             
             // Clear LCD
             uint8_t clearData[8] = {0};
+            clearData[4] = 0xFF; // OEM required padding
+            clearData[5] = 0xFF; // OEM required padding
             clearData[7] = VX1_OVERRIDE_FORCE;
-            canHardware->Send((3 << 26) | (VX1_ODOMETER_PGN << 8) | 0x80, clearData, 8);
+            canHardware->Send(BuildDisplayId(VX1_ODOMETER_PGN, 0x80, 3), clearData, 8); // Priority 3 for odometer
         }
     }
     

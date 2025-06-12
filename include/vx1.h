@@ -168,7 +168,7 @@ public:
      * @param override Override control (default true = 0xAA to force display)
      * @return true if message was sent successfully
      */
-    static bool SendClockMessage(CanHardware* canHardware, uint8_t sourceAddress = 0xF9, bool masterOnly = false, bool override = true);
+    static bool SendClockMessage(CanHardware* canHardware, uint8_t sourceAddress = 0xF9, bool masterOnly = false);
     
     /**
      * Task to periodically send the clock message (call every 100ms)
@@ -191,6 +191,16 @@ public:
      * @param bmsFsm Pointer to the BmsFsm instance for master node detection
      */
     static void ClockStatsDisplayTask(CanHardware* canHardware, BmsFsm* bmsFsm = nullptr);
+    
+    /**
+     * Send the odometer right display keep-alive message (PGN 0xFEEE)
+     * 
+     * This function should be called every 100ms to prevent dashboard timeouts.
+     * It sends a blank display with override byte 0xAA on first frame, then 0x55.
+     * 
+     * @param canHardware Pointer to the CAN hardware interface
+     */
+    static void OdoRightKeepAlive(CanHardware* canHardware);
     
     /**
      * @brief Send a message to the VX1 odometer display
@@ -431,11 +441,26 @@ private:
     // Static pointers for BmsCanMessagingTask
     static CanHardware* bmsCanHardware;
     static BmsFsm* bmsFsmInstance;
-    
+
+    /**
+     * @brief Build a consistent display message CAN ID with proper priority
+     * 
+     * @param pgn The J1939 PGN (Parameter Group Number)
+     * @param sa The source address
+     * @param prio Priority (3 bits, 0-7) - default 0 for OEM dashboard messages
+     * @return uint32_t The fully constructed 29-bit CAN ID
+     */
+    static inline uint32_t BuildDisplayId(uint32_t pgn, uint8_t sa, uint8_t prio = 0)
+    {
+        return (uint32_t(prio) << 26) | (pgn << 8) | sa;
+    }
+
     // Clock display data
     static char clockSegments[5]; // 4 segments + null terminator
     static char clockChargerIndicator;
     static bool clockActive;
+    static bool firstFrame; // True to force override on first message
+    static bool bootDisplayInitialized; // Tracks if boot welcome screen has been shown
     
     // Error reporting states
     static bool errorActive;
