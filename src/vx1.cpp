@@ -1159,40 +1159,17 @@ void VX1::ClockStatsDisplayTask(CanHardware* canHardware, BmsFsm* bmsFsm)
         return;
     
     // This function is called from Ms100Task, which is called every 100ms
-    // Send messages every 10 calls (once per second) to avoid overloading the dash
-    static uint8_t msgCounter = 0;
+    // Dashboard expects messages at 100ms interval, so send on every call
     
-    // Default to 1000ms (once per second) to avoid overloading the dash
-    // Only honor the VX1msgInterval parameter if it's greater than 1000ms
-    uint32_t msgInterval = Param::GetInt(Param::VX1msgInterval);
-    uint8_t sendRate = msgInterval > 1000 ? (msgInterval / 100) : 10;
-    
-    // Safety check
-    if (sendRate < 1) sendRate = 1;
-    
-    // Only send every N calls
-    if ((++msgCounter % sendRate) != 0)
-        return;
+    // Note: Previously we were sending stats once per second, but the dash expects
+    // more frequent updates (every 100ms) for stability
     
     // Check if clock stats display is enabled
     int clockStatsMode = Param::GetInt(Param::VX1LCDClockStats);
     
-    // If stats display is disabled, clear the display and return
+    // If stats display is disabled, simply return without sending any messages
+    // This allows the dashboard's native clock display to function without interference
     if (clockStatsMode == 0) {
-        // Create empty message to clear the display
-        uint8_t clearData[8] = {0};
-        clearData[4] = 0xFF; // OEM required padding
-        clearData[5] = 0xFF; // OEM required padding
-        clearData[7] = VX1_OVERRIDE_FORCE; // Use force override to ensure display is cleared
-        
-        // Send clear message to the clock display
-        uint32_t j1939Id = BuildDisplayId(VX1_CLOCK_PGN, 0xF9);
-        canHardware->Send(j1939Id, clearData, 8);
-        
-        // Also try with a different source address to ensure it gets cleared
-        j1939Id = BuildDisplayId(VX1_CLOCK_PGN, 0x80);
-        canHardware->Send(j1939Id, clearData, 8);
-        
         return;
     }
     
