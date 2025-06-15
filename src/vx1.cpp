@@ -2509,8 +2509,8 @@ bool VX1::SendPackExtremesPgn(CanHardware* canHw,
     /* Byte 1: highTemp - no +40°C offset */
     d[1] = static_cast<uint8_t>(tmax);      // Raw temperature
     
-    /* Byte 2: ambientTemp (unused) */
-    d[2] = 0x00;
+    /* Byte 2: ambientTemp (using the same value as low temp) */
+    d[2] = d[0];  // Use the same value as low temp
     
     /* For Little Endian byte order, we need to swap the byte order of the 16-bit values */
     /* Byte 3: cellHighVoltage bits 7-0 (LSB) */
