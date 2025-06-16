@@ -2540,7 +2540,7 @@ bool VX1::SendPackExtremesPgn(CanHardware* canHw,
     d[6] = (lowestCell << 4) | ((vmin >> 8) & 0x0F);
     
     /* Byte 7: battery module number (7-4) and Thermal switch (3-0) */
-    d[7] = (moduleIdx << 4) | 0x03;                // 0x3 = "normal" -> 0x03, 0x13, 0x23, 0x33 sequence
+    d[7] = (moduleIdx << 4) | 0x00;                // Match Li-plus: always send 0 for thermal switch
 
     uint32_t words[2];
     memcpy(words, d, 8);
