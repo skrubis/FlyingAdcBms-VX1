@@ -368,16 +368,34 @@ public:
     static void BmsCanMessagingTask();
     
     /**
-     * @brief Send Module Status / Power-Limit Handshake PGN (0xFDF0)
+     * @brief Send cell tap-ADC snapshot (PGN 0xFDF0)
      * 
-     * Sends module status with power-limit flags for MC/charger.
+     * Half-cell voltage implementation for Li-plus 36 S BMS:
+     * - One frame per logical BMS-board (SA 0x40-0x48)
+     * - 5 cells per frame × 2 half-cell taps = 10 cells / board
+     * - each cell encoded on 10 bits (6 MSb in bytes 0-4, 4 LSb in
+     *   nibbles of bytes 5-7) @ 1.5 mV / bit
      * 
-     * @param canHardware Pointer to the CAN hardware interface
-     * @param sourceAddress Source address (0x40-0x48)
-     * @param counter Rolling counter (incremented every transmission)
+     * @param can Pointer to the CAN hardware interface
+     * @param boardSa Source address (must be 0x40-0x48)
+     * @param packVolt Current pack voltage (will be divided by 36 for cell voltage)
+     * @return void No return value as errors are handled internally
+     */
+    static void SendFdf0HalfCellSnapshot(CanHardware* can, uint8_t boardSa, float packVolt);
+    
+    /**
+     * @brief Send Module Status / Power-Limit + Cell-Voltage PGN 0xFDF0
+     * @deprecated Use SendFdf0HalfCellSnapshot instead. This function is kept for reference only.
+     * 
+     * Li-plus 36 S implementation: four modules (SA 0x40–0x43),
+     * nine cells per module, 10-bit coarse voltages (1.5 mV/bit).
+     * 
+     * @param canHw Pointer to the CAN hardware interface
+     * @param sa Source address (must be 0x40-0x43)
+     * @param nowMs Current timestamp for timing operations
      * @return true if message was sent successfully
      */
-    static bool SendModuleStatusPgn(CanHardware* canHardware, uint8_t sourceAddress, uint8_t& counter, uint32_t currentTime);
+    static bool SendModuleStatusPgn(CanHardware* canHw, uint8_t sa, uint32_t nowMs);
     
     /**
      * @brief Send Pack Extremes PGN (0xFEF3) - New Format

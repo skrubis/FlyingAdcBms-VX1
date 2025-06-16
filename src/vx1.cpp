@@ -2208,227 +2208,241 @@ void VX1::RegisterMCTempMessages(CanHardware* canHardware)
 
 
 /**
- * Send Module Status / Power-Limit Handshake PGN (0xFDF0)
- * 
- * Sends module status with power-limit flags for MC/charger.
- * 
- * @param canHardware Pointer to the CAN hardware interface
- * @param sourceAddress Source address (0x40-0x48)
- * @param counter Rolling counter (incremented every transmission)
- * @return true if message was sent successfully
+ * Send Module Status / Power-Limit + Cell-Voltage PGN 0xFDF0
+ * Li-plus 36 S implementation: four modules (SA 0x40–0x43),
+ * nine cells per module, 10-bit coarse voltages (1.5 mV/bit).
+ *
+ * Every call sends one module. Call this function for SA 0x40,
+ * 41, 42, 43 in round-robin order every ≈ 100 ms.
+ *
+ * ┌──── byte ────┐
+ * |0|1|2|3|4|5|6|7|
+ *  \- cell0-4 MSB /  cell1-0 LSB nibble-packed  / mod-id + therm
  */
-bool VX1::SendModuleStatusPgn(CanHardware* canHardware, uint8_t sourceAddress, uint8_t& counter, uint32_t currentTime)
+bool VX1::SendModuleStatusPgn(CanHardware* canHw,
+                              uint8_t     sa,          // 0x40-0x43 only
+                              uint32_t    nowMs)       // ms-tick for timers
 {
-    // Check if we have a valid CAN interface
-    if (!canHardware)
-        return false;
+    // Mark nowMs as unused to avoid compiler warning
+    (void)nowMs;
     
-    // Create the data array for the message
+    if (!canHw || sa < 0x40 || sa > 0x43) return false;
+
+    // --------------------------------------------------------------------
+    // Fake-cell-voltage generator (36 S → 9 cells shown per board)
+    // --------------------------------------------------------------------
+    //
+    // Li-plus BMS packs five coarse cell readings (10-bit, 1.5 mV/bit) in
+    // every FDF0 frame.  We don't have the other module data, so we simply
+    // fake them:  utotal / 36  (same value for all cells).
+    //
+    //  ● Byte0-Byte4 : high-six bits (bits 9-4) of cell0-cell4
+    //  ● Byte5/6/7  : low-four bits arranged as nibbles (see spec)
+    //
+    // If VX1SendCellVoltages == 0 we still set the array to 0 → "no data".
+    // --------------------------------------------------------------------
+
+    constexpr float kScale = 1.5f;              // 1.5 mV/bit
+    const bool sendCells  = Param::GetInt(Param::VX1SendCellVoltages) == 1;
+
+    // Fetch total-pack voltage the cheap way
+    const float pack_mV      = Param::GetFloat(Param::VX1utotal);   // already in mV
+    const float cell_mV      = pack_mV / 36.0f;                     // 36 S pack
+    const uint16_t coarse    = static_cast<uint16_t>(cell_mV / kScale + 0.5f);
+    const uint8_t  high6     = (coarse >> 4) & 0x3F;                // bits 9-4
+    const uint8_t  low4      =  coarse        & 0x0F;               // bits 3-0
+
+    // Clear first, then fill when enabled
     uint8_t data[8] = {0};
-    
-    // --- Pack coarse cell voltages (PGN FDF0) ---------------------------
-    // Get average cell voltage (needed for both cell voltages and power limit checks)
-    // Use VX1-specific parameter to avoid interfering with BMS calculations
-    float vx1_uavg = Param::GetFloat(Param::VX1uavg);
-    
-    // Clear data bytes first
-    data[0] = data[1] = data[2] = data[3] = data[4] = 0;
-    
-    // Check if cell voltage transmission is enabled
-    if (Param::GetInt(Param::VX1SendCellVoltages) == 1) {
-        // Li+ sends one 8-bit coarse value per cell, not packed nibbles
-        // coarse_byte = round(Vcell / 27.34 mV)
-        // The diagnostic tool reads these as full bytes, not nibbles
-        const float cellVoltageScale = 0.02734f; // 27.34 mV per bit
-        
-        // For each FDF0 message, we pack data for cells (not split into nibbles)
-        // We could use sourceAddress to determine specific cell values for each module
-        // but for now we'll use average voltage-based calculations
-        
-        // Create an array of cell voltages for this module
-        float cellVoltages[8];
-        // Since we don't have per-cell values yet, create a reasonable spread around vx1_uavg
-        for (int i = 0; i < 8; i++) {
-            // Create slightly different voltages for each cell
-            cellVoltages[i] = vx1_uavg + ((i - 4) * 0.010f); // +/- 10mV steps
-        }
-        
-        // Pack one full byte per cell (not nibble-packed)
-        for (int c = 0; c < 4; c++) {
-            // Calculate the coarse voltage for this cell
-            uint8_t coarse = (uint8_t)(cellVoltages[c] / cellVoltageScale + 0.5f);
-            if (coarse > 0xFE) coarse = 0xFE; // Li+ never transmits 0xFF
-            
-            // Each cell gets a full byte
-            data[c] = coarse;
-        }
-        
-        // Byte 4: Copy the last coarse byte like Li+
-        data[4] = data[3];
+
+    if (sendCells)
+    {
+        // bytes 0-4 → high6 bits for cells 0-4
+        data[0] = high6;
+        data[1] = high6;
+        data[2] = high6;
+        data[3] = high6;
+        data[4] = high6;
+
+        // Byte5  upper-nibble = cell1 low4, lower-nibble = cell0 low4
+        data[5] = static_cast<uint8_t>((low4 << 4) | low4);
+        // Byte6  upper-nibble = cell3 low4, lower-nibble = cell2 low4
+        data[6] = static_cast<uint8_t>((low4 << 4) | low4);
+        // Byte7  upper-nibble = module index (filled later), lower-nibble = cell4 low4
+        // The upper nibble is added further below, keep lower nibble for now:
+        data[7] = low4;
     }
-    // If VX1SendCellVoltages is disabled, all voltage bytes remain 0
-    
-    // Byte 5: Power-limit flags
-    uint8_t powerLimitFlags = 0x1; // Default: normal operation (no derate)
-    
-    // Check if charge current should be limited
-    bool limitCharge = false;
-    bool limitDischarge = false;
-    
-    // Reuse existing fault detection logic:
-    // Already have vx1_uavg from above
-    float vx1_tempmax = Param::GetFloat(Param::VX1tempmax);
-    float vx1_tempmin = Param::GetFloat(Param::VX1tempmin);
-    float highTempLimit = Param::GetFloat(Param::VX1TempWarnHiPoint);
-    float lowTempLimit = Param::GetFloat(Param::VX1TempWarnLoPoint);
-    
-    // Only set limit flags in case of REAL limit conditions, with time delay
-    // For normal operation at ~3.57V, keep powerLimitFlags = 0x1
-    
-    // Use time-based approach for charge limiting like Li+
-    static uint32_t ovStartTime = 0;
-    
-    // Check if average voltage exceeds 4.18V threshold
-    if (vx1_uavg > 4180.0f) {
-        // Start the timer if not already started
-        if (ovStartTime == 0) {
-            ovStartTime = currentTime;
-        }
-    } else {
-        // Reset the timer if voltage drops below threshold
-        ovStartTime = 0;
+    else
+    {
+        // leave bytes 0-4,5,6,7 = 0 to signal "no voltage data"
     }
-    
-    // Only limit charge if voltage has been high for more than 10 seconds
-    if (ovStartTime > 0 && (currentTime - ovStartTime > 10000)) {
-        limitCharge = true;
-    }
-    
-    // From SendBmsPgn0xFEF2 - Request Discharge Power Reduce
-    if (vx1_uavg < 3450.0f) {
-        limitDischarge = true;
-    }
-    
-    // Check temperature limits
-    if (vx1_tempmax > highTempLimit || vx1_tempmin < lowTempLimit) {
-        limitCharge = true;
-    }
-    
-    // Check if we're in error mode
-    if (Param::GetInt(Param::opmode) == BmsFsm::ERROR) {
-        limitCharge = true;
-        limitDischarge = true;
-    }
-    
-    // Set power limit flags based on conditions
-    if (limitCharge && limitDischarge) {
-        powerLimitFlags = 0xB; // Limit both charge & discharge
-    } else if (limitCharge) {
-        powerLimitFlags = 0x8; // Limit charge
-    } else if (limitDischarge) {
-        powerLimitFlags = 0x9; // Limit discharge
-    }
-    
-    data[5] = (powerLimitFlags << 4) | 0x1; // Power limit flags in bits 7-4, 0x1 in bits 3-0
-    
-    // Byte 6: Copy Byte 5 (as per spec)
+
+    // ---------------- byte-5 : limit flags + redundancy -------------------
+    //   upper nibble = limit flags
+    //   lower nibble = copy of same 4 bits   (keeps it non-zero)
+    //
+    //   0x1 = normal   0x8 = limit-chg   0x9 = limit-dchg   0xB = limit-both
+    //
+    uint8_t powerLimitFlags = 0x1;                       // <= always "no derate"
+    data[5] = static_cast<uint8_t>((powerLimitFlags << 4) |
+                                  (powerLimitFlags & 0x0F));
+
+    // Byte-6 must mirror byte-5 in stock firmware
     data[6] = data[5];
+
+    // ---------------- byte-7 : module index + counter -------------------
+    static uint8_t counter = 0;
+    uint8_t moduleIdx = sa - 0x40;  // 0-3 for SA 0x40-0x43
     
-    // Byte 7: Rolling counter (bits 5-0)
-    // Keep bits 7-6 clear so the tool doesn't treat them as a nibble
-    counter = (counter + 1) & 0x3F; // Increment and wrap at 63
-    data[7] = counter; // Bits 7-6 are already 0 since we initialized data[7] = 0
-    
-    // Calculate CAN ID: Priority 0 (highest), PGN 0xFDF0, Source Address
-    uint32_t canId = 0x00FDF000 | sourceAddress;
-    
-    // Send the message
-    uint32_t dataWords[2];
-    memcpy(dataWords, data, 8);
-    canHardware->Send(canId, dataWords);
+    // upper-nibble = module number (0-3 for 4 modules), already known
+    // lower-nibble = kept from voltage packing step
+    data[7] = static_cast<uint8_t>((moduleIdx << 4) | (data[7] & 0x0F));
+    // overwrite the lower two bits with rolling counter (Li+ behaviour: 6-bit counter)
+    counter = (counter + 1) & 0x3F;
+    data[7] = static_cast<uint8_t>((data[7] & 0xFC) | (counter & 0x03));
+
+    /* ------------  4. Ship it  ------------------------------------ */
+    uint32_t words[2];
+    memcpy(words, data, 8);
+
+    const uint32_t canId = 0x00FDF000 | sa;            // pri 0, PGN FDF0
+    canHw->Send(canId, words);
     
     return true;
 }
 
-/**
- * Process CAN messages with PGN FF05h from SA 0x05 (Motor Controller temperatures)
- * 
- * This function extracts heatsink and capacitor temperatures from the Motor Controller
- * and updates the corresponding parameters.
- * 
- * @param canId CAN ID of the received message
- * @param data Array containing the message data
- */
-void VX1::ProcessMotorControllerTempMessage(uint32_t canId, uint32_t data[2])
+/**********************************************************************
+ *  PGN 0x00FDF0  –  "Cell tap-ADC snapshot" re-implementation
+ *
+ *  • one frame per logical BMS-board (SA 0x40 … 0x48)
+ *  • 5 cells per frame  × 2 half-cell taps  = 10 cells / board
+ *  • each cell encoded on 10 bits (6 MSb in bytes 0-4, 4 LSb in
+ *    nibbles of bytes 5-7)  @ 1.5 mV / bit
+ *********************************************************************/
+void VX1::SendFdf0HalfCellSnapshot(CanHardware *can,
+                                   uint8_t        boardSa,   // 0x40 … 0x48
+                                   float          packVolt)  // live pack V
 {
-    // Only process messages if:
-    // 1. The message has the correct CAN ID
-    // 2. VX1mode = 1 (VX1 mode enabled)
-    // 3. We're on the master node (nodeId = 0 or 10)
-    if (canId != VX1_MC_TEMP_ID || 
-        !IsEnabled() ||
-        (Param::GetInt(Param::modaddr) != 0 && Param::GetInt(Param::modaddr) != 10))
-    {
-        return;
-    }
-    
-    // Extract temperature data from the message
-    // The data is in the first data word (data[0])
-    uint8_t* bytes = (uint8_t*)data;
-    
-    // Byte 3: MC heat-sink temperature (°C)
-    uint8_t mcHeatsinkTemp = bytes[3];
-    
-    // Byte 4: Capacitor #1 temperature (°C)
-    uint8_t mcCap1Temp = bytes[4];
-    
-    // Byte 5: Capacitor #2 temperature (°C)
-    uint8_t mcCap2Temp = bytes[5];
-    
-    // Byte 6: Capacitor #3 temperature (°C)
-    uint8_t mcCap3Temp = bytes[6];
-    
-    // Update the parameters
-    Param::SetInt(Param::MCHeatsinkTemp, (int)mcHeatsinkTemp);
-    Param::SetInt(Param::MCCapacitor1Temp, (int)mcCap1Temp);
-    Param::SetInt(Param::MCCapacitor2Temp, (int)mcCap2Temp);
-    Param::SetInt(Param::MCCapacitor3Temp, (int)mcCap3Temp);
+    if (!IsEnabled() || !can || boardSa < 0x40 || boardSa > 0x48) return;
+
+    constexpr float kBitSize  = 0.0015f;   // 1.5 mV / bit
+
+    const float fullCell = packVolt / 36.0f;   // ≈ 3.6-4.2 V
+    const float halfCell = fullCell * 0.5f;    // tap sits mid-divider
+
+    /* Pre-compute the 10-bit raw value we will replicate          */
+    float rawValue = halfCell / kBitSize;
+    if (rawValue > 1023.0f) rawValue = 1023.0f; // Clamp to 10-bit max
+    uint16_t raw = static_cast<uint16_t>(rawValue + 0.5f);  // Round to nearest integer
+
+    /* Split once – reuse for every cell in this frame             */
+    uint8_t high   = raw >> 4;       // bits 9-4  (max 0x3F)
+    uint8_t lowNib = raw & 0x0F;     // bits 3-0
+
+    uint8_t d[8]   = {0};
+    /* bytes 0-4  – high six bits for cells 0-4                    */
+    for (int i = 0; i < 5; ++i) d[i] = high;
+
+    /* byte 5  – low nibble cell0 in bits3-0,  cell1 in bits7-4    */
+    d[5] = (lowNib) | (lowNib << 4);
+    /* byte 6  – low nibble cell2 / cell3                          */
+    d[6] = d[5];
+    /* byte 7  – low nibble cell4  + board-ID in bits7-4           */
+    d[7] = lowNib | ((boardSa - 0x40) << 4);
+
+    /* Build 29-bit ID: priority 3 | PGN 0xFDF0 | SA               */
+    uint32_t id = (3u << 26) | (0xFDF0u << 8) | boardSa;
+    can->Send(id, d, 8);
 }
+
+//--------------------------------------------------------------------------
+//  PGN FF05h  (SA 0x05 – Motor-Controller "Ready / Temp / Status" frame)
+//  ┌ Byte ─┬─────────────────────── meaning ─────────────────────────────┐
+//  │   0   │  Ready / GO / VPE / Reverse flags (OEM – already handled)   │
+//  │   1   │  Regen / brake-light flag (OEM – already handled)           │
+//  │   2   │  Speed  [km h-1]                                            │
+//  │   3   │  Heat-sink temperature        [°C]                          │
+//  │   4   │  Capacitor #1 temperature     [°C]                          │
+//  │   5   │  Capacitor #2 temperature     [°C]                          │
+//  │   6   │  Capacitor #3 temperature     [°C]                          │
+//  │   7   │  **Dynamic status nibble** (observed)                       │
+//  │       │       bit0 = right-brake     (1 = pressed)                  │
+//  │       │       bit1 = throttle > 0    (1 = driving FWD)              │
+//  │       │       bit2 = left-brake      (1 = pressed)                  │
+//  │       │       bit3 = reverse / regen (1 = throttle < 0)             │
+//  │       │   high-nibble = 0 = kill-sw / VPE-off, 1 = system ready     │
+//  └───────┴──────────────────────────────────────────────────────────────┘
+//--------------------------------------------------------------------------
+
+void VX1::ProcessMotorControllerTempMessage(uint32_t canId,
+                                            uint32_t data[2])
+{
+    /* 1. Filter – only master node cares */
+    if (canId != VX1_MC_TEMP_ID || !IsEnabled())
+        return;
+    int mod = Param::GetInt(Param::modaddr);
+    if (mod != 0 && mod != 10)            // not master
+        return;
+
+    /* 2. Extract bytes exactly in CAN order                              */
+    const uint8_t *b = reinterpret_cast<const uint8_t*>(&data[0]);
+
+    const uint8_t tempHs   = b[3];        // heatsink
+    const uint8_t tempC1   = b[4];
+    const uint8_t tempC2   = b[5];
+    const uint8_t tempC3   = b[6];
+    const uint8_t status   = b[7];
+
+    /* 3. Publish temperatures so the web-UI stops showing "0 °C"         */
+    Param::SetInt(Param::MCHeatsinkTemp,      static_cast<int>(tempHs));
+    Param::SetInt(Param::MCCapacitor1Temp,    static_cast<int>(tempC1));
+    Param::SetInt(Param::MCCapacitor2Temp,    static_cast<int>(tempC2));
+    Param::SetInt(Param::MCCapacitor3Temp,    static_cast<int>(tempC3));
+
+    /* 4. Store raw status byte for logging                               */
+    Param::SetInt(Param::MCStatusRaw,     static_cast<int>(status));
+    
+    /* 5. Decode byte-7 "dynamic status"                                  */
+    const bool sysReady   = (status & 0xF0) == 0x10;
+    const bool brkRight   = status & 0x01;
+    const bool throttleF  = status & 0x02;
+    const bool brkLeft    = status & 0x04;
+    const bool reverseOrR = status & 0x08;
+
+    /* 6. Expose the bits through your own parameters (add these IDs
+          in param_prj.h if they do not exist yet).                       */
+    Param::SetInt(Param::MCReady,        sysReady   ? 1 : 0);
+    Param::SetInt(Param::MCBrakeRight,   brkRight   ? 1 : 0);
+    Param::SetInt(Param::MCBrakeLeft,    brkLeft    ? 1 : 0);
+    Param::SetInt(Param::MCThrottleFwd,  throttleF ? 1 : 0);
+    Param::SetInt(Param::MCReverse,      reverseOrR ? 1 : 0);
+}
+
+// Li-plus BMS firmware ID string to replicate original system behavior
+static constexpr char kLiPlusFwId[8] = { 'B','M','S',' ','R','0','9','\n' };
 
 /**
  * Send Firmware Revision PGN (0xFEDA)
  * 
- * Sends firmware revision as ASCII string "REV 1234" with appropriate source address.
+ * Sends firmware revision as ASCII string "BMS R09\n" with source address 0x40.
+ * Per Li-plus protocol requirements, this must only be sent from SA 0x40.
  * 
  * @param canHardware Pointer to the CAN hardware interface
- * @param sourceAddress Source address (0x40-0x48)
+ * @param sourceAddress Source address (must be 0x40)
  * @return true if message was sent successfully
  */
 bool VX1::SendFirmwareRevisionPgn(CanHardware* canHardware, uint8_t sourceAddress)
 {
-    // Check if we have a valid CAN interface
-    if (!canHardware)
+    // Check if we have a valid CAN interface and that sourceAddress is in valid BMS range (0x40-0x48)
+    if (!canHardware || sourceAddress < 0x40 || sourceAddress > 0x48)
         return false;
-    
-    // Create the data array for the message
-    uint8_t data[8] = {0};
-    
-    // Set the firmware revision string as per spec
-    data[0] = 'O';
-    data[1] = 'I';
-    data[2] = 'B';
-    data[3] = 'M';
-    data[4] = 'S';
-    data[5] = '0';
-    data[6] = '2';
-    data[7] = '6';
     
     // Construct the CAN ID: 00 (priority 0, highest) + PGN (0xFEDA) + source address
     uint32_t canId = 0x00FEDA00 | sourceAddress;
     
-    // Convert uint8_t array to uint32_t array for the Send method
-    uint32_t dataWords[2];
-    memcpy(dataWords, data, 8);
+    // Convert the firmware ID string to uint32_t array for the Send method
+    uint32_t dataWords[2] = {0};
+    memcpy(dataWords, kLiPlusFwId, 8);
     
     // Send the message
     canHardware->Send(canId, dataWords);
@@ -2598,15 +2612,21 @@ void VX1::BmsCanMessagingTask()
     // This ensures VX1 code doesn't interfere with BMS calculations
     SyncBmsToVX1Parameters();
     
-    /* --------- FDF0 handshake messages --------- */
-    static uint8_t fdf0Cnt[9] = {0};    // one rolling counter per SA
+    /* --------- FDF0 cell voltage snapshot messages --------- */
+    // Use a round-robin approach for all nine BMS source addresses (0x40-0x48)
+    static uint8_t fdf0Sa = 0x40;  // Current source address to send
     
     // Only send FDF0 messages if VX1SendCellVoltages is enabled
     if (Param::GetInt(Param::VX1SendCellVoltages) == 1) {
         if (lastFDF0 == 0 || (currentTime - lastFDF0 >= 100)) {  // every 100 ms
-            for (uint8_t sa = 0x40; sa <= 0x48; ++sa) {
-                SendModuleStatusPgn(bmsCanHardware, sa, fdf0Cnt[sa-0x40], currentTime);
-            }
+            // Get current pack voltage for half-cell calculation
+            float packVolt = Param::GetFloat(Param::VX1utotal) / 1000.0f;  // convert mV to V
+            
+            // Send from current address in rotation (0x40-0x48 for full protocol)
+            SendFdf0HalfCellSnapshot(bmsCanHardware, fdf0Sa, packVolt);
+            
+            // Move to next source address, wrap around after 0x48
+            fdf0Sa = (fdf0Sa == 0x48) ? 0x40 : fdf0Sa + 1;
             lastFDF0 = currentTime;
         }
     }
@@ -2640,11 +2660,11 @@ void VX1::BmsCanMessagingTask()
         lastFEF3 = currentTime;
     }
     
-    // Send PGN 0xFEDA messages (1s period)
+    // Send firmware revision PGN (0xFEDA) once every second
     if (lastFEDATime == 0 || (currentTime - lastFEDATime >= 1000)) {
         // Only send if firmware revision messages are enabled
         if (Param::GetInt(Param::VX1SendFirmwareRevision) == 1) {
-            // Send from all 9 addresses
+            // Send from all 9 BMS addresses (0x40-0x48) per Li-plus protocol
             for (uint8_t i = 0; i < 9; i++) {
                 uint8_t sourceAddress = 0x40 + i;
                 SendFirmwareRevisionPgn(bmsCanHardware, sourceAddress);

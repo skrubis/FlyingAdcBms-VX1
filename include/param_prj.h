@@ -110,7 +110,7 @@
     PARAM_ENTRY(CAT_VX1_CAN,     VX1EmulateBMSmsg, "0=off, 1=on",   0,      1 ,      1,      162 ) \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1kWhResetDist, "km",   0.1,    20,      5,      163 ) \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1TempWarnHiPoint, "°C",     40,     80,     55,     164 ) \
-    PARAM_ENTRY(CAT_VX1_CAN,     VX1TempWarnLoPoint, "°C",     -25,    40,     0,     165 ) \
+    PARAM_ENTRY(CAT_VX1_CAN,     VX1TempWarnLoPoint, "°C",     -25,    40,     -1,     165 ) \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1mockTemp, "°C",     -20,    55,     24,     167 ) \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1ModuleNumber, "1-15",     1,     15,     1,     168 ) \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1SendFirmwareRevision, "0=off, 1=on",   0,      1 ,      1,      169 ) \
@@ -232,7 +232,14 @@
     VALUE_ENTRY(VX1tempmin,    "°C",   2118 ) \
     VALUE_ENTRY(VX1tempmax,    "°C",   2119 ) \
     VALUE_ENTRY(VX1udelta,     "mV",   2120 ) \
-    VALUE_ENTRY(VX1uavg,       "mV",   2121 )
+    VALUE_ENTRY(VX1uavg,       "mV",   2121 ) \
+    /* Motor Controller Status Bits from byte 7 of PGN 0xFF05 */ \
+    VALUE_ENTRY(MCReady,       OFFON,  2122 ) \
+    VALUE_ENTRY(MCBrakeRight,  OFFON,  2123 ) \
+    VALUE_ENTRY(MCBrakeLeft,   OFFON,  2124 ) \
+    VALUE_ENTRY(MCThrottleFwd, OFFON,  2125 ) \
+    VALUE_ENTRY(MCReverse,     OFFON,  2126 ) \
+    VALUE_ENTRY(MCStatusRaw,   "hex",  2127 )
 
 
 /***** Enum String definitions *****/
