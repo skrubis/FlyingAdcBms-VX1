@@ -112,8 +112,7 @@
     PARAM_ENTRY(CAT_VX1_CAN,     VX1TempWarnHiPoint, "°C",     40,     80,     55,     164 ) \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1TempWarnLoPoint, "°C",     -25,    40,     -1,     165 ) \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1mockTemp, "°C",     -20,    55,     24,     167 ) \
-    PARAM_ENTRY(CAT_VX1_CAN,     VX1ModuleNumber, "1-15",     1,     15,     1,     168 ) \
-    PARAM_ENTRY(CAT_VX1_CAN,     VX1SendFirmwareRevision, "0=off, 1=on",   0,      1 ,      1,      169 ) \
+    PARAM_ENTRY(CAT_VX1_CAN,     VX1SendFirmwareRevision, "0=off, 1=on",   0,      1 ,      0,      169 ) \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1SendCellVoltages, "0=off, 1=on",   0,      1 ,      0,      170 ) \
     VALUE_ENTRY(version,     VERSTR, 2001 ) \
     VALUE_ENTRY(hwrev,       HWREVS, 2104 ) \

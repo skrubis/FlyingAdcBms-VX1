@@ -118,6 +118,9 @@ uint32_t VX1::lastCalculationTime = 0; // Last time consumption was calculated
 // J1939 PGN for Motor Controller temperature data messages
 #define VX1_MC_TEMP_PGN 0x00FF05
 #define VX1_MC_SA 0x05
+// Define PGN+SA only (bits 23-0), ignoring priority bits (26-24) for filtering
+#define VX1_MC_TEMP_PGN_SA 0x00FF0505  // PGN 0xFF05, SA 0x05, priority ignored
+// Original ID with priority 0 kept for backward compatibility
 #define VX1_MC_TEMP_ID 0x00FF0505  // Priority 0 (0x00), PGN 0xFF05, SA 0x05
 
 // BMS PGN definitions
@@ -2200,10 +2203,24 @@ void VX1::RegisterVehicleDataMessages(CanHardware* canHardware)
  */
 void VX1::RegisterMCTempMessages(CanHardware* canHardware)
 {
-    if (canHardware) {
-        // Register to receive Motor Controller temperature messages
-        canHardware->RegisterUserMessage(VX1_MC_TEMP_ID);
-    }
+    if (!canHardware) return;
+
+    // Check if RegisterUserMessage supports mask parameter
+    // Uncomment the appropriate implementation:
+
+    /* Option 1: If RegisterUserMessage supports mask parameter */
+    /* Accept any priority (bits 26-24); mask = 0x1C000000
+       Accept exact PGN+SA (bits 23-0); mask = 0x00FFFFFF */
+    const uint32_t id = VX1_MC_TEMP_PGN_SA;  // We don't care about priority bits here
+    const uint32_t mask = 0x1C000000;        // Ignore bits 26-24 (priority)
+    canHardware->RegisterUserMessage(id, mask);
+
+    /* Option 2: If RegisterUserMessage doesn't support mask parameter */
+    /* Register for the two priorities we've observed */
+    /* Enable this code if Option 1 doesn't work
+    canHardware->RegisterUserMessage(0x18FF0505);   // prio 6 (commonly observed)
+    canHardware->RegisterUserMessage(0x1CFF0505);   // prio 7 (service frames)
+    */
 }
 
 
@@ -2378,7 +2395,7 @@ void VX1::ProcessMotorControllerTempMessage(uint32_t canId,
                                             uint32_t data[2])
 {
     /* 1. Filter – only master node cares */
-    if (canId != VX1_MC_TEMP_ID || !IsEnabled())
+    if ((canId & 0x00FFFFFF) != VX1_MC_TEMP_PGN_SA || !IsEnabled())
         return;
     int mod = Param::GetInt(Param::modaddr);
     if (mod != 0 && mod != 10)            // not master
