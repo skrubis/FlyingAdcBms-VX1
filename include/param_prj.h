@@ -57,6 +57,10 @@
     PARAM_ENTRY(CAT_BMS,     numchan,     "",        1,      16,     12,     4   ) \
     PARAM_ENTRY(CAT_BMS,     balmode,     BALMODE,   0,      3,      0,      5   ) \
     PARAM_ENTRY(CAT_BMS,     ubalance,    "mV",      0,      4500,   4500,   30  ) \
+    PARAM_ENTRY(CAT_BMS,     balDeltaMed, "cycles",  0,      500,    150,    171 ) \
+    PARAM_ENTRY(CAT_BMS,     balDeltaHigh,"cycles",  0,      750,    300,    172 ) \
+    PARAM_ENTRY(CAT_BMS,     safeVoltage, "mV",      3000,   4200,   4000,   173 ) \
+    PARAM_ENTRY(CAT_BMS,     maxScanDelay,"s",       5,      60,     30,     174 ) \
     PARAM_ENTRY(CAT_BMS,     idlewait,    "s",       0,      100000, 60,     12  ) \
     PARAM_ENTRY(CAT_BMS,     sleeptimeout,"h",        0,      99,     2,      56  ) \
     PARAM_ENTRY(CAT_BMS,     idlecurrent, "mA",       0,      9999,   800,    57  ) \

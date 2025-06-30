@@ -37,8 +37,18 @@ class BmsIO
 
    private:
       static void Accumulate(float sum, float min, float max, float avg);
+      
+      // Helper functions for adaptive balancing
+      static bool IsAboveSafeVoltage();
+      static int ScaleExtraBalancingCycles(int baseCycles);
+      static void UpdateCellBalancingNeeds();
+      
       static BmsFsm* bmsFsm;
       static int muxRequest;
+      
+      // Tracking for cells needing extended balancing
+      static uint8_t cellsNeedingBalance[16]; // Assumes MAX_CELLS=16
+      static int totalCellsNeedingBalance;
 };
 
 #endif // BMSIO_H

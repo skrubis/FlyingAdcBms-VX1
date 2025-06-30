@@ -22,9 +22,85 @@
 #include "temp_meas.h"
 #include "my_math.h"
 #include "flyingadcbms.h"
+#include <cmath> // For fabs function
 
 BmsFsm* BmsIO::bmsFsm;
 int BmsIO::muxRequest = -1;
+uint8_t BmsIO::cellsNeedingBalance[16] = {0};
+int BmsIO::totalCellsNeedingBalance = 0;
+
+// Check if battery is at high voltage (above safe threshold)
+bool BmsIO::IsAboveSafeVoltage()
+{
+    float safeVolt = Param::GetFloat(Param::safeVoltage);
+    return Param::GetFloat(Param::umax) > safeVolt;
+}
+
+// Scale the extra balancing cycles based on voltage and cell requirements
+int BmsIO::ScaleExtraBalancingCycles(int baseCycles)
+{
+    int maxDelayMs = Param::GetInt(Param::maxScanDelay) * 1000;
+    int cycleTimeMs = 25; // 25ms per cycle
+    int maxTotalCycles = maxDelayMs / cycleTimeMs;
+    float reductionFactor = 1.0f;
+    
+    // Reduce by factor of 0.3 if above safe voltage 
+    if (IsAboveSafeVoltage()) {
+        reductionFactor = 0.3f;
+    }
+    
+    // If we have multiple cells needing balancing, reduce cycles to stay under total delay
+    if (totalCellsNeedingBalance > 1) {
+        int maxCyclesPerCell = maxTotalCycles / totalCellsNeedingBalance;
+        // Ensure we don't exceed the overall limit
+        reductionFactor = MIN(reductionFactor, (float)maxCyclesPerCell / baseCycles);
+    }
+    
+    return (int)(baseCycles * reductionFactor);
+}
+
+// Identify which cells need extended balancing
+void BmsIO::UpdateCellBalancingNeeds()
+{
+    totalCellsNeedingBalance = 0;
+    float balanceTarget = 0;
+    int balMode = Param::GetInt(Param::balmode);
+    int numChan = Param::GetInt(Param::numchan);
+    
+    // Skip if balancing is off
+    if (balMode == BAL_OFF) {
+        return;
+    }
+    
+    // Determine target voltage based on balance mode
+    switch (balMode)
+    {
+        case BAL_ADD: // Maximum cell voltage is target when only adding
+            balanceTarget = Param::GetFloat(Param::umax);
+            break;
+        case BAL_DIS: // Minimum cell voltage is target when only dissipating
+            balanceTarget = Param::GetFloat(Param::umin);
+            break;
+        case BAL_BOTH: // Average cell voltage is target when dissipating and adding
+            balanceTarget = Param::GetFloat(Param::uavg);
+            break;
+        default: 
+            return;
+    }
+    
+    // Check each cell against target
+    for (int i = 0; i < numChan; i++) {
+        float udc = Param::GetFloat((Param::PARAM_NUM)(Param::u0 + i));
+        float deviation = fabs(udc - balanceTarget);
+        
+        if (deviation > 15.0f) {
+            cellsNeedingBalance[i] = 1;
+            totalCellsNeedingBalance++;
+        } else {
+            cellsNeedingBalance[i] = 0;
+        }
+    }
+}
 
 /** \brief Mux control function. Must be called in 2 ms interval */
 void BmsIO::SwitchMux()
@@ -60,23 +136,33 @@ void BmsIO::ReadCellVoltages()
 {
    const int totalBalanceCycles = 30;
    static uint8_t chan = 0, balanceCycles = 0;
+   static int extraBalanceCycles = 0;
    static float sum = 0, min = 8000, max = 0;
    int balMode = Param::GetInt(Param::balmode);
    bool balance = Param::GetInt(Param::opmode) == BmsFsm::IDLE && Param::GetFloat(Param::uavg) > Param::GetFloat(Param::ubalance) && BAL_OFF != balMode;
    FlyingAdcBms::BalanceStatus bstt;
+   
+   // Update which cells need balancing (once per full cycle)
+   if (chan == 0 && balanceCycles == 0 && extraBalanceCycles == 0) {
+      UpdateCellBalancingNeeds();
+   }
 
    if (balance)
    {
-      if (balanceCycles == 0)
+      if (balanceCycles == 0 && extraBalanceCycles == 0)
       {
-         balanceCycles = totalBalanceCycles; //this leads to switching to next channel below
+         balanceCycles = totalBalanceCycles; // This leads to switching to next channel below
       }
-      else
+      else if (extraBalanceCycles > 0)
+      {
+         extraBalanceCycles--;
+      }
+      else if (balanceCycles > 0)
       {
          balanceCycles--;
       }
 
-      if (balanceCycles > 0 && balanceCycles < (totalBalanceCycles - 1))
+      if ((balanceCycles > 0 && balanceCycles < (totalBalanceCycles - 1)) || extraBalanceCycles > 0)
       {
          float udc = Param::GetFloat((Param::PARAM_NUM)(Param::u0 + chan));
          float balanceTarget = 0;
@@ -95,21 +181,74 @@ void BmsIO::ReadCellVoltages()
          default: //not balancing
             break;
          }
+         
+         // Calculate the deviation to determine aggressiveness
+         float deviation = fabs(udc - balanceTarget);
+         float chargeThreshold = 3.0f;
+         float dischargeThreshold = 1.0f;
+         
+         // More aggressive thresholds for cells with larger deviations
+         if (deviation > 15.0f) {
+            // Use more aggressive thresholds for cells that need balancing badly
+            chargeThreshold = 1.5f;
+            dischargeThreshold = 0.5f;
+         }
 
-         if (udc < (balanceTarget - 3) && (balMode & BAL_ADD))
+         if (udc < (balanceTarget - chargeThreshold) && (balMode & BAL_ADD))
          {
             bstt = FlyingAdcBms::SetBalancing(FlyingAdcBms::BAL_CHARGE);
          }
-         else if (udc > (balanceTarget + 1) && (balMode & BAL_DIS))
+         else if (udc > (balanceTarget + dischargeThreshold) && (balMode & BAL_DIS))
          {
             bstt = FlyingAdcBms::SetBalancing(FlyingAdcBms::BAL_DISCHARGE);
          }
          else
          {
             bstt = FlyingAdcBms::SetBalancing(FlyingAdcBms::BAL_OFF);
-            balanceCycles = 0;
+            if (extraBalanceCycles > 0) {
+               // Keep track of extra balancing cycles separately
+               extraBalanceCycles = 0;
+            } else {
+               balanceCycles = 0;
+            }
          }
          Param::SetInt((Param::PARAM_NUM)(Param::u0cmd + chan), bstt);
+      }
+      else if (balanceCycles == 1) // When we're about to finish balancing
+      {
+         // When we're about to finish the normal balancing cycle, check if this cell needs extended balancing
+         float udc = Param::GetFloat((Param::PARAM_NUM)(Param::u0 + chan));
+         float balanceTarget = 0;
+         
+         // Get the appropriate balance target based on mode (same code as above)
+         switch (balMode)
+         {
+         case BAL_ADD:
+            balanceTarget = Param::GetFloat(Param::umax);
+            break;
+         case BAL_DIS:
+            balanceTarget = Param::GetFloat(Param::umin);
+            break;
+         case BAL_BOTH:
+            balanceTarget = Param::GetFloat(Param::uavg);
+            break;
+         default:
+            break;
+         }
+         
+         float deviation = fabs(udc - balanceTarget);
+         
+         // Determine if cell needs extended balancing and calculate extra cycles
+         if (deviation > 30.0f && cellsNeedingBalance[chan]) {
+            int extraCycles = Param::GetInt(Param::balDeltaHigh);
+            extraBalanceCycles = ScaleExtraBalancingCycles(extraCycles);
+         } 
+         else if (deviation > 15.0f && cellsNeedingBalance[chan]) {
+            int extraCycles = Param::GetInt(Param::balDeltaMed);
+            extraBalanceCycles = ScaleExtraBalancingCycles(extraCycles);
+         }
+         
+         FlyingAdcBms::SetBalancing(FlyingAdcBms::BAL_OFF);
       }
       else
       {
@@ -123,8 +262,8 @@ void BmsIO::ReadCellVoltages()
       Param::SetInt((Param::PARAM_NUM)(Param::u0cmd + chan), bstt);
    }
 
-   //Read cell voltage when balancing is turned off
-   if (balanceCycles == totalBalanceCycles)
+   // Read cell voltage when balancing is turned off AND no extra balancing cycles remain
+   if (balanceCycles == totalBalanceCycles && extraBalanceCycles == 0)
    {
       float gain = Param::GetFloat(Param::gain);
       int numChan = Param::GetInt(Param::numchan);
