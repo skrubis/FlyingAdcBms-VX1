@@ -138,8 +138,8 @@ float FlyingAdcBms::GetResult()
 FlyingAdcBms::BalanceStatus FlyingAdcBms::SetBalancing(BalanceCommand cmd)
 {
    BalanceStatus stt = STT_OFF;
-   uint8_t data[2];
-   uint8_t currentPins = 0;
+   uint8_t data[2] = { 0x3 /* pin mode register */, 0x0 /* All pins as output */};
+   SendRecvI2C(DIO_ADDR, WRITE, data, 2);
 
    data[0] = 0x1; //output port register
 
@@ -147,7 +147,6 @@ FlyingAdcBms::BalanceStatus FlyingAdcBms::SetBalancing(BalanceCommand cmd)
    {
    case BAL_OFF:
       data[1] = HBRIDGE_ALL_OFF;
-      //data[1] = selectedChannel & 1 ? 0xE : 0xB;
       break;
    case BAL_DISCHARGE:
       data[1] = HBRIDGE_DISCHARGE_VIA_LOWSIDE;
@@ -160,11 +159,7 @@ FlyingAdcBms::BalanceStatus FlyingAdcBms::SetBalancing(BalanceCommand cmd)
       stt = selectedChannel & 1 ? STT_CHARGENEG : STT_CHARGEPOS;
    }
 
-   // Read current pins state
-   SendRecvI2C(DIO_ADDR, READ, &currentPins, 1);
-   
-   if (data[1] != currentPins)
-      SendRecvI2C(DIO_ADDR, WRITE, data, 2);
+   SendRecvI2C(DIO_ADDR, WRITE, data, 2);
 
    return stt;
 }
