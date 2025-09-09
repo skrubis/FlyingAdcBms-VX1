@@ -42,6 +42,9 @@ class BmsIO
       static bool IsAboveSafeVoltage();
       static int ScaleExtraBalancingCycles(int baseCycles);
       static void UpdateCellBalancingNeeds();
+      // Focused weak-cell mode helpers
+      static float ComputeBalanceTarget(int balMode);
+      static void EvaluateFocusSet();
       
       static BmsFsm* bmsFsm;
       static int muxRequest;
@@ -49,6 +52,15 @@ class BmsIO
       // Tracking for cells needing extended balancing
       static uint8_t cellsNeedingBalance[16]; // Assumes MAX_CELLS=16
       static int totalCellsNeedingBalance;
+
+      // Focus mode state
+      static int focusChan;                       // currently focused cell, -1 if none
+      static int focusHoldCyclesRemaining;        // remaining 25ms cycles to hold focus
+      static bool focusActive;                    // focus mode currently active
+      static uint8_t focusSet[16];                // top-N focus mask
+      // Periodic refresh during focus
+      static bool focusRefreshActive;             // true while we sweep once to refresh globals
+      static int focusRefreshCountdownCycles;     // countdown to next refresh (25ms cycles)
 };
 
 #endif // BMSIO_H

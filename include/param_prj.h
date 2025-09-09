@@ -61,6 +61,13 @@
     PARAM_ENTRY(CAT_BMS,     balDeltaHigh,"cycles",  0,      750,    300,    172 ) \
     PARAM_ENTRY(CAT_BMS,     safeVoltage, "mV",      3000,   4200,   4000,   173 ) \
     PARAM_ENTRY(CAT_BMS,     maxScanDelay,"s",       5,      60,     30,     174 ) \
+    PARAM_ENTRY(CAT_BMS,     balFocusEnable, OFFON,   0,      1,      1,      175 ) \
+    PARAM_ENTRY(CAT_BMS,     balFocusMinDev, "mV",   0,      500,    15,     176 ) \
+    PARAM_ENTRY(CAT_BMS,     balFocusTopN,   "",     1,      4,      1,      177 ) \
+    PARAM_ENTRY(CAT_BMS,     balFocusHold,   "s",    0,      36000,  600,    178 ) \
+    PARAM_ENTRY(CAT_BMS,     balAllowRun,    OFFON,   0,      1,      1,      179 ) \
+    PARAM_ENTRY(CAT_BMS,     balTargetTrimLowK, "cells", 0,  4,      1,      180 ) \
+    PARAM_ENTRY(CAT_BMS,     balFocusRefresh, "s",   0,      3600,   60,     181 ) \
     PARAM_ENTRY(CAT_BMS,     idlewait,    "s",       0,      100000, 60,     12  ) \
     PARAM_ENTRY(CAT_BMS,     sleeptimeout,"h",        0,      99,     2,      56  ) \
     PARAM_ENTRY(CAT_BMS,     idlecurrent, "mA",       0,      9999,   800,    57  ) \

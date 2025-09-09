@@ -28,12 +28,156 @@ BmsFsm* BmsIO::bmsFsm;
 int BmsIO::muxRequest = -1;
 uint8_t BmsIO::cellsNeedingBalance[16] = {0};
 int BmsIO::totalCellsNeedingBalance = 0;
+int BmsIO::focusChan = -1;
+int BmsIO::focusHoldCyclesRemaining = 0;
+bool BmsIO::focusActive = false;
+uint8_t BmsIO::focusSet[16] = {0};
+bool BmsIO::focusRefreshActive = false;
+int BmsIO::focusRefreshCountdownCycles = 0;
 
 // Check if battery is at high voltage (above safe threshold)
 bool BmsIO::IsAboveSafeVoltage()
 {
     float safeVolt = Param::GetFloat(Param::safeVoltage);
     return Param::GetFloat(Param::umax) > safeVolt;
+}
+
+// Compute a balancing target. If balTargetTrimLowK > 0, use trimmed average that
+// excludes the K lowest cells to avoid dragging the target down due to weak cells.
+float BmsIO::ComputeBalanceTarget(int balMode)
+{
+    int numChan = Param::GetInt(Param::numchan);
+    int k = Param::GetInt(Param::balTargetTrimLowK);
+    if (k < 0) k = 0;
+    if (k > numChan - 1) k = numChan - 1;
+
+    // If no trimming requested, keep legacy behavior
+    if (k == 0)
+    {
+        switch (balMode)
+        {
+            case BAL_ADD: return Param::GetFloat(Param::umax);
+            case BAL_DIS: return Param::GetFloat(Param::umin);
+            case BAL_BOTH: default: return Param::GetFloat(Param::uavg);
+        }
+    }
+
+    // Copy cell voltages into array
+    float vals[16];
+    for (int i = 0; i < numChan; i++)
+        vals[i] = Param::GetFloat((Param::PARAM_NUM)(Param::u0 + i));
+
+    // Simple selection sort ascending (N<=16)
+    for (int i = 0; i < numChan - 1; i++)
+    {
+        int minIdx = i;
+        for (int j = i + 1; j < numChan; j++)
+            if (vals[j] < vals[minIdx]) minIdx = j;
+        if (minIdx != i) { float t = vals[i]; vals[i] = vals[minIdx]; vals[minIdx] = t; }
+    }
+
+    int start = k;
+    int count = numChan - start;
+    if (count <= 0)
+    {
+        // Fallback to legacy
+        switch (balMode)
+        {
+            case BAL_ADD: return Param::GetFloat(Param::umax);
+            case BAL_DIS: return Param::GetFloat(Param::umin);
+            case BAL_BOTH: default: return Param::GetFloat(Param::uavg);
+        }
+    }
+
+    float sum = 0;
+    for (int i = start; i < numChan; i++) sum += vals[i];
+    return sum / count;
+}
+
+// Select top-N weak (low) cells relative to the (trimmed) target and prepare focus state.
+void BmsIO::EvaluateFocusSet()
+{
+    // Reset focus set
+    for (int i = 0; i < 16; i++) focusSet[i] = 0;
+
+    if (Param::GetInt(Param::balFocusEnable) != 1)
+    {
+        focusActive = false;
+        focusChan = -1;
+        focusHoldCyclesRemaining = 0;
+        return;
+    }
+
+    const int balMode = Param::GetInt(Param::balmode);
+    const int numChan = Param::GetInt(Param::numchan);
+    const float target = ComputeBalanceTarget(balMode);
+    const float minDev = Param::GetFloat(Param::balFocusMinDev);
+    int topN = Param::GetInt(Param::balFocusTopN);
+    if (topN < 1) topN = 1;
+    if (topN > numChan) topN = numChan;
+
+    float deficit[16];
+    for (int i = 0; i < numChan; i++)
+    {
+        float u = Param::GetFloat((Param::PARAM_NUM)(Param::u0 + i));
+        float d = target - u; // positive when cell is below target
+        deficit[i] = (d >= minDev) ? d : 0.0f;
+    }
+
+    // Pick top-N by deficit (largest first)
+    int selected = 0;
+    int bestIdx = -1;
+    float bestDef = 0.0f;
+    for (int sel = 0; sel < topN; sel++)
+    {
+        int pick = -1; float pickDef = 0.0f;
+        for (int i = 0; i < numChan; i++)
+        {
+            if (focusSet[i]) continue;
+            if (deficit[i] > pickDef)
+            {
+                pickDef = deficit[i];
+                pick = i;
+            }
+        }
+        if (pick >= 0)
+        {
+            focusSet[pick] = 1;
+            selected++;
+            if (bestIdx < 0 || pickDef > bestDef)
+            {
+                bestIdx = pick;
+                bestDef = pickDef;
+            }
+        }
+        else break;
+    }
+
+    if (selected > 0)
+    {
+        // If we change the focus cell, reset hold timer
+        if (focusChan != bestIdx || focusHoldCyclesRemaining <= 0)
+        {
+            focusChan = bestIdx;
+            int holdSec = Param::GetInt(Param::balFocusHold);
+            if (holdSec < 0) holdSec = 0;
+            focusHoldCyclesRemaining = (holdSec * 1000) / 25; // 25 ms per call
+        }
+        focusActive = true;
+        // Initialize refresh countdown if not set
+        if (focusRefreshCountdownCycles <= 0)
+        {
+            int refreshSec = Param::GetInt(Param::balFocusRefresh);
+            if (refreshSec < 0) refreshSec = 0;
+            focusRefreshCountdownCycles = (refreshSec * 1000) / 25;
+        }
+    }
+    else
+    {
+        focusActive = false;
+        focusChan = -1;
+        focusHoldCyclesRemaining = 0;
+    }
 }
 
 // Scale the extra balancing cycles based on voltage and cell requirements
@@ -72,21 +216,8 @@ void BmsIO::UpdateCellBalancingNeeds()
         return;
     }
     
-    // Determine target voltage based on balance mode
-    switch (balMode)
-    {
-        case BAL_ADD: // Maximum cell voltage is target when only adding
-            balanceTarget = Param::GetFloat(Param::umax);
-            break;
-        case BAL_DIS: // Minimum cell voltage is target when only dissipating
-            balanceTarget = Param::GetFloat(Param::umin);
-            break;
-        case BAL_BOTH: // Average cell voltage is target when dissipating and adding
-            balanceTarget = Param::GetFloat(Param::uavg);
-            break;
-        default: 
-            return;
-    }
+    // Determine target voltage using trimmed average if configured
+    balanceTarget = ComputeBalanceTarget(balMode);
     
     // Check each cell against target
     for (int i = 0; i < numChan; i++) {
@@ -139,7 +270,57 @@ void BmsIO::ReadCellVoltages()
    static int extraBalanceCycles = 0;
    static float sum = 0, min = 8000, max = 0;
    int balMode = Param::GetInt(Param::balmode);
-   bool balance = Param::GetInt(Param::opmode) == BmsFsm::IDLE && Param::GetFloat(Param::uavg) > Param::GetFloat(Param::ubalance) && BAL_OFF != balMode;
+   // Manage focus mode timers and periodic refresh
+   if (Param::GetInt(Param::balFocusEnable) == 1)
+   {
+      // Initialize or update refresh countdown
+      if (focusRefreshCountdownCycles <= 0)
+      {
+         int refreshSec = Param::GetInt(Param::balFocusRefresh);
+         if (refreshSec < 0) refreshSec = 0;
+         focusRefreshCountdownCycles = (refreshSec * 1000) / 25;
+      }
+      else
+      {
+         focusRefreshCountdownCycles--;
+      }
+
+      // Evaluate or continue focus hold
+      if (!focusActive || focusHoldCyclesRemaining <= 0)
+      {
+         EvaluateFocusSet();
+      }
+      else
+      {
+         focusHoldCyclesRemaining--;
+      }
+
+      // Trigger a periodic full sweep if due
+      if (focusActive && !focusRefreshActive && focusRefreshCountdownCycles <= 0)
+      {
+         focusRefreshActive = true;
+      }
+   }
+   else
+   {
+      // Focus mode disabled
+      focusActive = false;
+      focusChan = -1;
+      focusHoldCyclesRemaining = 0;
+      focusRefreshActive = false;
+      focusRefreshCountdownCycles = 0;
+   }
+
+   // Allow balancing in IDLE or optionally in RUN when current is below idle threshold
+   int opmode = Param::GetInt(Param::opmode);
+   bool inIdle = (opmode == BmsFsm::IDLE);
+   bool allowRun = Param::GetInt(Param::balAllowRun) == 1;
+   float idleCurrentThreshold = Param::GetInt(Param::idlecurrent) / 1000.0f; // A
+   bool lowCurrent = fabs(Param::GetFloat(Param::idcavg)) < idleCurrentThreshold;
+   bool opmodeOk = inIdle || (allowRun && lowCurrent);
+   bool ubalanceOk = Param::GetFloat(Param::uavg) > Param::GetFloat(Param::ubalance);
+   // If focusing on weak cells, bypass ubalance gate so we can charge them even when average is low
+   bool balance = opmodeOk && (BAL_OFF != balMode) && (ubalanceOk || focusActive);
    FlyingAdcBms::BalanceStatus bstt;
    
    // Update which cells need balancing (once per full cycle)
@@ -165,21 +346,12 @@ void BmsIO::ReadCellVoltages()
       if ((balanceCycles > 0 && balanceCycles < (totalBalanceCycles - 1)) || extraBalanceCycles > 0)
       {
          float udc = Param::GetFloat((Param::PARAM_NUM)(Param::u0 + chan));
-         float balanceTarget = 0;
-
-         switch (balMode)
+         float balanceTarget = ComputeBalanceTarget(balMode);
+         int effBalMode = balMode;
+         // In focus mode on the focused cell, do not discharge it further
+         if (focusActive && chan == focusChan)
          {
-         case BAL_ADD: //maximum cell voltage is target when only adding
-            balanceTarget = Param::GetFloat(Param::umax);
-            break;
-         case BAL_DIS: //minimum cell voltage is target when only dissipating
-            balanceTarget = Param::GetFloat(Param::umin);
-            break;
-         case BAL_BOTH: //average cell voltage is target when dissipating and adding
-            balanceTarget = Param::GetFloat(Param::uavg);
-            break;
-         default: //not balancing
-            break;
+            effBalMode &= BAL_ADD; // only allow charging
          }
          
          // Calculate the deviation to determine aggressiveness
@@ -194,11 +366,11 @@ void BmsIO::ReadCellVoltages()
             dischargeThreshold = 0.5f;
          }
 
-         if (udc < (balanceTarget - chargeThreshold) && (balMode & BAL_ADD))
+         if (udc < (balanceTarget - chargeThreshold) && (effBalMode & BAL_ADD))
          {
             bstt = FlyingAdcBms::SetBalancing(FlyingAdcBms::BAL_CHARGE);
          }
-         else if (udc > (balanceTarget + dischargeThreshold) && (balMode & BAL_DIS))
+         else if (udc > (balanceTarget + dischargeThreshold) && (effBalMode & BAL_DIS))
          {
             bstt = FlyingAdcBms::SetBalancing(FlyingAdcBms::BAL_DISCHARGE);
          }
@@ -218,32 +390,17 @@ void BmsIO::ReadCellVoltages()
       {
          // When we're about to finish the normal balancing cycle, check if this cell needs extended balancing
          float udc = Param::GetFloat((Param::PARAM_NUM)(Param::u0 + chan));
-         float balanceTarget = 0;
-         
-         // Get the appropriate balance target based on mode (same code as above)
-         switch (balMode)
-         {
-         case BAL_ADD:
-            balanceTarget = Param::GetFloat(Param::umax);
-            break;
-         case BAL_DIS:
-            balanceTarget = Param::GetFloat(Param::umin);
-            break;
-         case BAL_BOTH:
-            balanceTarget = Param::GetFloat(Param::uavg);
-            break;
-         default:
-            break;
-         }
+         // Use trimmed target for deviation check
+         float balanceTarget = ComputeBalanceTarget(balMode);
          
          float deviation = fabs(udc - balanceTarget);
          
          // Determine if cell needs extended balancing and calculate extra cycles
-         if (deviation > 30.0f && cellsNeedingBalance[chan]) {
+         if (!focusActive && deviation > 30.0f && cellsNeedingBalance[chan]) {
             int extraCycles = Param::GetInt(Param::balDeltaHigh);
             extraBalanceCycles = ScaleExtraBalancingCycles(extraCycles);
          } 
-         else if (deviation > 15.0f && cellsNeedingBalance[chan]) {
+         else if (!focusActive && deviation > 15.0f && cellsNeedingBalance[chan]) {
             int extraCycles = Param::GetInt(Param::balDeltaMed);
             extraBalanceCycles = ScaleExtraBalancingCycles(extraCycles);
          }
@@ -285,27 +442,45 @@ void BmsIO::ReadCellVoltages()
       max = MAX(max, udc);
       sum += udc;
 
-      //First we sweep across all even channels: 0, 2, 4,...
-      if (even && (chan + 2) < numChan)
-         chan += 2;
-      //After reaching the furthest even channel (say 12) we either change over to a higher odd channel
-      else if (even && (chan + 1) < numChan)
-         chan++;
-      //or lower odd channel
-      else if (even)
-         chan--;
-      //Now we sweep across all odd channels until we reach 1
-      else if (chan > 1)
-         chan -= 2;
-      //We have now reached chan 1. Accumulate values and restart at chan 0
+      if (!focusActive || focusRefreshActive)
+      {
+         //First we sweep across all even channels: 0, 2, 4,...
+         if (even && (chan + 2) < numChan)
+            chan += 2;
+         //After reaching the furthest even channel (say 12) we either change over to a higher odd channel
+         else if (even && (chan + 1) < numChan)
+            chan++;
+         //or lower odd channel
+         else if (even)
+            chan--;
+         //Now we sweep across all odd channels until we reach 1
+         else if (chan > 1)
+            chan -= 2;
+         //We have now reached chan 1. Accumulate values and restart at chan 0
+         else
+         {
+            chan = 0;
+            Accumulate(sum, min, max, sum / Param::GetInt(Param::numchan));
+
+            min = 8000;
+            max = 0;
+            sum = 0;
+
+            // If we were doing a periodic refresh during focus, end it and reschedule next
+            if (focusRefreshActive)
+            {
+               focusRefreshActive = false;
+               int refreshSec = Param::GetInt(Param::balFocusRefresh);
+               if (refreshSec < 0) refreshSec = 0;
+               focusRefreshCountdownCycles = (refreshSec * 1000) / 25;
+               EvaluateFocusSet();
+            }
+         }
+      }
       else
       {
-         chan = 0;
-         Accumulate(sum, min, max, sum / Param::GetInt(Param::numchan));
-
-         min = 8000;
-         max = 0;
-         sum = 0;
+         // Stay on focused channel for the duration of the hold
+         if (focusChan >= 0) chan = focusChan;
       }
 
       //This instructs the SwitchMux task to change channel, with dead time
