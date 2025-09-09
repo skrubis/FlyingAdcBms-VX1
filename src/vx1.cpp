@@ -2616,6 +2616,19 @@ void VX1::BmsCanMessagingTask()
         return;
     }
     
+    // Global startup delay for ALL hardware versions to avoid bus contention
+    // Wait until system uptime >= 5s AND FSM has reached RUN (or later)
+    // Param::uptime is updated every 100ms in Ms100Task using rtc_get_counter_val()
+    {
+        const int STARTUP_DELAY_S = 5; // conservative delay across all HW revs
+        int uptimeSec = Param::GetInt(Param::uptime);
+        int opmode = Param::GetInt(Param::opmode);
+        if (uptimeSec < STARTUP_DELAY_S || opmode < BmsFsm::RUN)
+        {
+            return;
+        }
+    }
+    
     // Use a static counter that increments by 10ms each call (task runs every 10ms)
     static uint32_t t = 0;
     t += 10;                       // this task is scheduled every 10 ms
