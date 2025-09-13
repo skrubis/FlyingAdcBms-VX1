@@ -44,39 +44,6 @@ The repository provides a project file for Code::Blocks, a rather leightweight I
 For building though, it just executes the above command. Its build system is not actually used.
 Consequently you can use your favority IDE or editor for editing files.
 
-# Configuration parameters (advanced)
-The firmware exposes configuration parameters via the parameter system (see `include/param_prj.h`).
-Below are advanced parameters related to balancing focus mode, target computation, and older hardware timing.
-
-- balFocusEnable (0/1, default 1)
-  Enables the Focused Weak-Cell mode. When enabled, the BMS can hold on the weakest cell(s) for long durations to accelerate recovery.
-
-- balFocusMinDev (mV, default 15)
-  Minimum deviation below the balance target required for a cell to qualify for the focus set.
-
-- balFocusTopN (1..4, default 1)
-  Number of cells to include in the focus set (typically 1). The most deviating cell becomes the active focus channel.
-
-- balFocusHold (s, default 600)
-  Hold time per focused cell. During this time, the channel is pinned to the focused cell to maximize balancing duty.
-
-- balAllowRun (0/1, default 1)
-  Allows balancing while in RUN if |idcavg| is below the `idlecurrent` threshold, effectively treating low-current RUN like IDLE.
-
-- balTargetTrimLowK (cells, default 1)
-  Trims the balance target by excluding the K lowest cells when computing the target. This prevents one weak cell from pulling the target down and causing unnecessary discharge of already-balanced cells. Note: this affects the target used for balancing decisions only; the displayed `uavg/umin/umax` remain untrimmed.
-  Set to 0 to revert to legacy behavior.
-
-- balFocusRefresh (s, default 60)
-  While focusing a weak cell, perform a full periodic sweep every N seconds to refresh `uavg/umin/umax` and re-evaluate the focus set.
-
-- muxSettleExtra (ms, default 6; effective on older HW only)
-  Adds extra settle time between MUX channel select and ADC start to prevent repeated identical readings on older boards. Applied only on HW_20/HW_21/HW_22/HW_24; ignored on HW_23 and HWV1.
-
-Notes:
-- When focus mode is active, the focused cell is never discharged (charge-only on that channel), and the `ubalance` gate is bypassed so weak cells can be raised even when average voltage is low.
-- The trimmed target affects balancing decisions (charge/discharge thresholding) but does not alter the reported `uavg/umin/umax` values.
-
 # Adding classes or modules
 As your firmware grows you probably want to add classes. To do so, put the header file in include/ and the 
 source file in src/ . Then add your module to the object list in Makefile that starts in line 43 with .o
