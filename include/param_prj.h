@@ -68,6 +68,7 @@
     PARAM_ENTRY(CAT_BMS,     balAllowRun,    OFFON,   0,      1,      1,      179 ) \
     PARAM_ENTRY(CAT_BMS,     balTargetTrimLowK, "cells", 0,  4,      1,      180 ) \
     PARAM_ENTRY(CAT_BMS,     balFocusRefresh, "s",   0,      3600,   60,     181 ) \
+    PARAM_ENTRY(CAT_BMS,     muxSettleExtra,  "ms",  0,      50,     6,      182 ) \
     PARAM_ENTRY(CAT_BMS,     idlewait,    "s",       0,      100000, 60,     12  ) \
     PARAM_ENTRY(CAT_BMS,     sleeptimeout,"h",        0,      99,     2,      56  ) \
     PARAM_ENTRY(CAT_BMS,     idlecurrent, "mA",       0,      9999,   800,    57  ) \

@@ -22,6 +22,7 @@
 #include "temp_meas.h"
 #include "my_math.h"
 #include "flyingadcbms.h"
+#include "hwdefs.h"
 #include <cmath> // For fabs function
 
 BmsFsm* BmsIO::bmsFsm;
@@ -238,6 +239,8 @@ void BmsIO::SwitchMux()
 {
    static int channel = -1;
    static bool startAdc = false;
+   static bool pendingStart = false;
+   static int settleTicks = 0; // 2ms per tick
 
    //t=0 ms: On a mux change request first completely turn off mux
    if (muxRequest >= 0)
@@ -251,9 +254,36 @@ void BmsIO::SwitchMux()
    {
       FlyingAdcBms::SelectChannel(channel);
       channel = -1;
-      startAdc = true;
+      // Determine if we need extra settle time for older hardware
+      int extraMs = Param::GetInt(Param::muxSettleExtra);
+      int hw = Param::GetInt(Param::hwrev);
+      bool isOldHw = (hw == HW_20 || hw == HW_21 || hw == HW_22 || hw == HW_24);
+
+      if (isOldHw && extraMs > 0)
+      {
+         pendingStart = true;
+         settleTicks = (extraMs + 1) / 2; // convert ms to 2ms ticks
+         startAdc = false;
+      }
+      else
+      {
+         startAdc = true;
+      }
    }
-   //t=4 ms: start ADC
+   else if (pendingStart)
+   {
+      // Keep H-bridge off while we wait for the analog path to settle
+      FlyingAdcBms::SetBalancing(FlyingAdcBms::BAL_OFF);
+      if (settleTicks > 0)
+      {
+         settleTicks--;
+      }
+      else
+      {
+         startAdc = true;
+         pendingStart = false;
+      }
+   }
    else if (startAdc)
    {
       FlyingAdcBms::StartAdc();
