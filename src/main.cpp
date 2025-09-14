@@ -376,9 +376,13 @@ extern "C" int main(void)
       char c = 0;
       CanSdo::SdoFrame* sdoFrame = sdo.GetPendingUserspaceSdo();
 
-      if (sdo.GetPrintRequest() == PRINT_JSON)
+      int pr = sdo.GetPrintRequest();
+      if (pr >= 0)
       {
-         TerminalCommands::PrintParamsJson(&sdo, &c);
+         // subIndex 0: normal JSON; subIndex 1: include hidden params
+         char argBuf[2] = {0, 0};
+         if (pr == 1) argBuf[0] = 'h';
+         TerminalCommands::PrintParamsJson(&sdo, argBuf);
       }
       if (0 != sdoFrame)
       {
