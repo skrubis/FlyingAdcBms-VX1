@@ -104,26 +104,24 @@
     TESTP_ENTRY(CAT_TEST,    testchan,    "",        -1,     15,     -1,     49  ) \
     TESTP_ENTRY(CAT_TEST,    testbalance, BALMODE,   0,      2,      0,      54  ) \
     PARAM_ENTRY(CAT_VX1,     VX1mode,     VX1MODE,    0,      1,      1,      101  ) \
-    PARAM_ENTRY(CAT_VX1_CHR,     VX1chrCellMaxV,      "mV",      3800,   4200,   4150,   131 ) \
-    PARAM_ENTRY(CAT_VX1_CAN,     VX1SendConfigMsg, "0=off, 1=send",   0,      1 ,      0,      161 ) \
-    PARAM_ENTRY(CAT_VX1_CAN,     VX1enCanMsg,  "0=Off, 1=On",     0,      1,      1,      140 ) \
+    /* removed param: VX1enCanMsg (hardcoded ON when VX1mode==1) */ \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1BootLCDMsg,   "0=Off, 1=On",     0,      1,      1,      148 ) \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1enBootstats, "0=Off, 1=On",     0,      1,      1,      149 ) \
-    PARAM_ENTRY(CAT_VX1_CAN,     VX1msgInterval, "ms",     50,      1000,      100,      150 ) \
+    /* removed param: VX1msgInterval (hardcoded 100 ms) */ \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1LCDClockStats, "0=Off, 1=Always, 2=Idle",     0,      2,      1,      152 ) \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1LCDClockStatVal, "0=soc, 1=uavg, 2=udelta, 3=tempmax, 4=power, 5=idcavg, 6=kWhper100km",     0,      6,      2,      153 ) \
-    PARAM_ENTRY(CAT_VX1_CAN,     VX1ErrWarn,  "0=Off, 1=On",     0,      1,      1,      154 ) \
-    PARAM_ENTRY(CAT_VX1_CAN,     VX1TempWarn,  "0=Off, 1=On",     0,      1,      1,      155 ) \
+    /* removed param: VX1ErrWarn (hardcoded ON) */ \
+    /* removed param: VX1TempWarn (hardcoded ON) */ \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1TempWarnTest, "0=Off, 1=On",     0,      1,      0,      157 ) \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1uDeltaWarn,  "0=Off, 1=On",     0,      1,      1,      158 ) \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1uDeltaWarnTresh, "mV",     2,     500,    150,    159 ) \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1uDeltaWarnTest,  "0=Off, 1=On",     0,      1,      0,      160 ) \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1EmulateBMSmsg, "0=off, 1=on",   0,      1 ,      1,      162 ) \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1kWhResetDist, "km",   0.1,    20,      5,      163 ) \
-    PARAM_ENTRY(CAT_VX1_CAN,     VX1TempWarnHiPoint, "°C",     40,     80,     55,     164 ) \
-    PARAM_ENTRY(CAT_VX1_CAN,     VX1TempWarnLoPoint, "°C",     -25,    40,     -1,     165 ) \
-    PARAM_ENTRY(CAT_VX1_CAN,     VX1mockTemp, "°C",     -20,    55,     24,     167 ) \
-    PARAM_ENTRY(CAT_VX1_CAN,     VX1SendFirmwareRevision, "0=off, 1=on",   0,      1 ,      0,      169 ) \
+    /* removed param: VX1TempWarnHiPoint (hardcoded 45°C) */ \
+    /* removed param: VX1TempWarnLoPoint (hardcoded -10°C, currently unused) */ \
+    /* removed param: VX1mockTemp (removed from logic) */ \
+    /* removed param: VX1SendFirmwareRevision (tied to VX1EmulateBMSmsg) */ \
     PARAM_ENTRY(CAT_VX1_CAN,     VX1SendCellVoltages, "0=off, 1=on",   0,      1 ,      0,      170 ) \
     VALUE_ENTRY(version,     VERSTR, 2001 ) \
     VALUE_ENTRY(hwrev,       HWREVS, 2104 ) \

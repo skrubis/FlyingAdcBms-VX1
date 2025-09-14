@@ -406,8 +406,8 @@ void VX1::SetOdometerMessage(const char* message)
  */
 bool VX1::SendOdometerMessage(const char* message, CanHardware* canHardware, uint8_t sourceAddress, bool masterOnly)
 {
-    // Check if VX1 mode is enabled, VX1enCanMsg is set to 1, and we have a valid CAN interface
-    if (!IsEnabled() || !canHardware || Param::GetInt(Param::VX1enCanMsg) != 1)
+    // Check if VX1 mode is enabled and we have a valid CAN interface
+    if (!IsEnabled() || !canHardware)
         return false;
         
     // If masterOnly is true, check if this is the master node
@@ -566,8 +566,8 @@ void VX1::SetClockDisplay(char segment1, char segment2, char segment3, char segm
  */
 bool VX1::SendClockMessage(CanHardware* canHardware, uint8_t sourceAddress, bool masterOnly)
 {
-    // Check if VX1 mode is enabled, VX1enCanMsg is set to 1, and we have a valid CAN interface
-    if (!IsEnabled() || !canHardware || Param::GetInt(Param::VX1enCanMsg) != 1)
+    // Check if VX1 mode is enabled and we have a valid CAN interface
+    if (!IsEnabled() || !canHardware)
         return false;
         
     // If masterOnly is true, check if this is the master node
@@ -662,11 +662,11 @@ static void BootDisplayTask()
     // Only proceed if we're in an active boot display state, VX1 mode is enabled, and VX1enCanMsg is set to 1
     // Note: We allow BOOT_DISPLAY_DONE state to proceed so we can clear the display
     if (bootDisplayState == BOOT_DISPLAY_IDLE || 
-        !bootDisplayCanHardware || !VX1::IsEnabled() || Param::GetInt(Param::VX1enCanMsg) != 1)
+        !bootDisplayCanHardware || !VX1::IsEnabled())
         return;
     
     // Get message interval from parameter
-    uint32_t msgInterval = Param::GetInt(Param::VX1msgInterval);
+    const uint32_t msgInterval = 100;
     
     // Get current time 
     uint32_t currentTime = bootDisplayTimer++;
@@ -1066,13 +1066,9 @@ void VX1::CheckAndInitBootDisplay(CanHardware* canHardware, Stm32Scheduler* sche
     static bool mcTempDataRegistered = false;
     
     // Register for vehicle data and MC temperature messages if not already done
-    // Only register if:
-    // 1. VX1mode = 1 (VX1 mode enabled)
-    // 2. VX1enCanMsg = 1 (CAN messages enabled)
-    // 3. We're on the master node
+    // Only register if VX1mode = 1 (VX1 enabled) and we're on the master node
     if (canHardware != nullptr && bmsFsm != nullptr &&
-        Param::GetInt(Param::VX1mode) == 1 && 
-        Param::GetInt(Param::VX1enCanMsg) == 1 &&
+        Param::GetInt(Param::VX1mode) == 1 &&
         IsMaster(bmsFsm)) // Check if this is the master node
     {
         // Register for vehicle data messages
@@ -1115,7 +1111,7 @@ void VX1::CheckAndInitBootDisplay(CanHardware* canHardware, Stm32Scheduler* sche
 void VX1::OdoRightKeepAlive(CanHardware* canHardware)
 {
     // Check if VX1 mode is enabled and CAN messages are enabled
-    if (!IsEnabled() || Param::GetInt(Param::VX1enCanMsg) != 1 || !canHardware)
+    if (!IsEnabled() || !canHardware)
         return;
     
     // Prepare a blank data packet for the right odometer display
@@ -1158,7 +1154,7 @@ void VX1::ClockStatsDisplayTask(CanHardware* canHardware, BmsFsm* bmsFsm)
         return;
     
     // Basic checks for VX1 mode and master node
-    if (!IsEnabled() || !IsMaster(bmsFsm) || Param::GetInt(Param::VX1enCanMsg) != 1)
+    if (!IsEnabled() || !IsMaster(bmsFsm))
         return;
     
     // This function is called from Ms100Task, which is called every 100ms
@@ -1485,8 +1481,8 @@ void VX1::ClockStatsDisplayTask(CanHardware* canHardware, BmsFsm* bmsFsm)
  */
 void VX1::DisplayBootWelcomeScreen(CanHardware* canHardware, Stm32Scheduler* scheduler, BmsFsm* bmsFsm)
 {
-    // Only proceed if VX1 mode is enabled, VX1BootLCDMsg is set to 1, VX1enCanMsg is set to 1, and this is the master node
-    if (!IsEnabled() || Param::GetInt(Param::VX1BootLCDMsg) != 1 || Param::GetInt(Param::VX1enCanMsg) != 1 || !IsMaster(bmsFsm) || !canHardware || !scheduler)
+    // Only proceed if VX1 mode is enabled, VX1BootLCDMsg is set to 1, and this is the master node
+    if (!IsEnabled() || Param::GetInt(Param::VX1BootLCDMsg) != 1 || !IsMaster(bmsFsm) || !canHardware || !scheduler)
         return;
     
     // Initialize boot display variables
@@ -1498,8 +1494,8 @@ void VX1::DisplayBootWelcomeScreen(CanHardware* canHardware, Stm32Scheduler* sch
     // Turn on battery telltale
     SetTelltaleState(TelltaleType::BATTERY, TelltaleState::ON);
     
-    // Get message interval from parameter
-    uint32_t msgInterval = Param::GetInt(Param::VX1msgInterval);
+    // Use fixed message interval per spec
+    const uint32_t msgInterval = 100;
     
     // Add the boot display task to the scheduler with the configured interval
     scheduler->AddTask(BootDisplayTask, msgInterval);
@@ -1517,8 +1513,8 @@ bool VX1::SendTelltaleControl(
     CanHardware* canHardware,
     bool masterOnly)
 {
-    // Check if VX1 mode is enabled, VX1enCanMsg is set to 1, and we have a valid CAN interface
-    if (!IsEnabled() || !canHardware || Param::GetInt(Param::VX1enCanMsg) != 1)
+    // Check if VX1 mode is enabled and we have a valid CAN interface
+    if (!IsEnabled() || !canHardware)
         return false;
         
     // Get current timestamp to check rate limiting
@@ -1606,8 +1602,8 @@ bool VX1::SendTelltaleControl(
  */
 bool VX1::ReportError(ERROR_MESSAGE_NUM errorCode, uint8_t nodeId, CanHardware* canHardware)
 {
-    // Check if VX1 mode is enabled, VX1enCanMsg is set to 1, VX1ErrWarn is set to 1, and we have a valid CAN interface
-    if (!IsEnabled() || !canHardware || Param::GetInt(Param::VX1enCanMsg) != 1 || Param::GetInt(Param::VX1ErrWarn) != 1)
+    // Check if VX1 mode is enabled and we have a valid CAN interface (error warnings always enabled)
+    if (!IsEnabled() || !canHardware)
         return false;
     
     // Store error state
@@ -1649,8 +1645,8 @@ void VX1::ErrorReportingTask(CanHardware* canHardware, BmsFsm* /*unused*/)
     if (!canHardware)
         return;
     
-    // Basic checks for VX1 mode - these are critical
-    if (!IsEnabled() || Param::GetInt(Param::VX1enCanMsg) != 1 || Param::GetInt(Param::VX1ErrWarn) != 1)
+    // Basic checks for VX1 mode - these are critical (error warnings always enabled)
+    if (!IsEnabled())
         return;
     
     // Get current errors (if any)
@@ -1735,8 +1731,8 @@ void VX1::ErrorReportingTask(CanHardware* canHardware, BmsFsm* /*unused*/)
  */
 bool VX1::ReportTemperatureWarning(float temperature, CanHardware* canHardware)
 {
-    // Check if VX1 mode is enabled, VX1enCanMsg is set to 1, VX1TempWarn is set to 1, and we have a valid CAN interface
-    if (!IsEnabled() || !canHardware || Param::GetInt(Param::VX1enCanMsg) != 1 || Param::GetInt(Param::VX1TempWarn) != 1)
+    // Check if VX1 mode is enabled and we have a valid CAN interface (temp warnings always enabled)
+    if (!IsEnabled() || !canHardware)
         return false;
 
     // Update the current temperature warning value
@@ -1774,7 +1770,7 @@ void VX1::TemperatureWarningTask(CanHardware* canHardware, BmsFsm* /*unused*/)
     // and we want to run it even if VX1TempWarn is not set to 1
     if (Param::GetInt(Param::VX1TempWarnTest) == 1) {
         // Basic checks for VX1 mode - these are critical
-        if (!IsEnabled() || Param::GetInt(Param::VX1enCanMsg) != 1)
+        if (!IsEnabled())
             return;
         
         // Store temp warning state for cleanup when test is turned off
@@ -1813,7 +1809,7 @@ void VX1::TemperatureWarningTask(CanHardware* canHardware, BmsFsm* /*unused*/)
     }
     
     // If we're here, test mode is off - check if regular warnings are enabled
-    if (!IsEnabled() || Param::GetInt(Param::VX1enCanMsg) != 1 || Param::GetInt(Param::VX1TempWarn) != 1)
+    if (!IsEnabled())
         return;
     
     // Handle case where test mode was just turned off
@@ -1845,7 +1841,8 @@ void VX1::TemperatureWarningTask(CanHardware* canHardware, BmsFsm* /*unused*/)
     
     // Get current temperature
     float tempMax = Param::GetFloat(Param::tempmax);
-    float tempWarnPoint = Param::GetFloat(Param::VX1TempWarnHiPoint);
+    // Use fixed temperature warning point per request
+    float tempWarnPoint = 45.0f;
     
     // If temperature exceeds warning threshold, report it
     if (tempMax >= tempWarnPoint) {
@@ -1896,8 +1893,8 @@ void VX1::TemperatureWarningTask(CanHardware* canHardware, BmsFsm* /*unused*/)
  */
 bool VX1::ReportUDeltaWarning(float uDelta, CanHardware* canHardware)
 {
-    // Check if VX1 mode is enabled, VX1enCanMsg is set to 1, VX1uDeltaWarn is set to 1, and we have a valid CAN interface
-    if (!IsEnabled() || !canHardware || Param::GetInt(Param::VX1enCanMsg) != 1 || Param::GetInt(Param::VX1uDeltaWarn) != 1)
+    // Check if VX1 mode is enabled and VX1uDeltaWarn is set to 1, and we have a valid CAN interface
+    if (!IsEnabled() || !canHardware || Param::GetInt(Param::VX1uDeltaWarn) != 1)
         return false;
     
     // Store uDelta warning state
@@ -1935,7 +1932,7 @@ void VX1::UDeltaWarningTask(CanHardware* canHardware, BmsFsm* /*unused*/)
     // and we want to run it even if VX1uDeltaWarn is not set to 1
     if (Param::GetInt(Param::VX1uDeltaWarnTest) == 1) {
         // Basic checks for VX1 mode - these are critical
-        if (!IsEnabled() || Param::GetInt(Param::VX1enCanMsg) != 1)
+        if (!IsEnabled())
             return;
         
         // Store udelta warning state for cleanup when test is turned off
@@ -1972,7 +1969,7 @@ void VX1::UDeltaWarningTask(CanHardware* canHardware, BmsFsm* /*unused*/)
     }
     
     // If we're here, test mode is off - check if regular warnings are enabled
-    if (!IsEnabled() || Param::GetInt(Param::VX1enCanMsg) != 1 || Param::GetInt(Param::VX1uDeltaWarn) != 1)
+    if (!IsEnabled() || Param::GetInt(Param::VX1uDeltaWarn) != 1)
         return;
     
     // Handle case where test mode was just turned off
@@ -2062,8 +2059,7 @@ void VX1::ProcessVehicleDataMessage(uint32_t canId, uint32_t data[2])
     // 2. VX1mode = 1 (VX1 mode enabled)
     // 3. VX1enCanMsg = 1 (CAN messages enabled)
     if (canId != VX1_VEHICLE_DATA_ID || 
-        Param::GetInt(Param::VX1mode) != 1 || 
-        Param::GetInt(Param::VX1enCanMsg) != 1) {
+        Param::GetInt(Param::VX1mode) != 1) {
         return;
     }
     
@@ -2609,9 +2605,7 @@ void VX1::BmsCanMessagingTask()
     
     // Check if basic conditions are met:
     // 1. VX1 mode is enabled (VX1mode = 1)
-    // 2. CAN messages are enabled (VX1enCanMsg = 1)
-    if (!IsEnabled() || 
-        Param::GetInt(Param::VX1enCanMsg) != 1)
+    if (!IsEnabled())
     {
         return;
     }
@@ -2690,15 +2684,12 @@ void VX1::BmsCanMessagingTask()
         lastFEF3 = currentTime;
     }
     
-    // Send firmware revision PGN (0xFEDA) once every second
+    // Send firmware revision PGN (0xFEDA) once every second (tied to VX1EmulateBMSmsg gate)
     if (lastFEDATime == 0 || (currentTime - lastFEDATime >= 1000)) {
-        // Only send if firmware revision messages are enabled
-        if (Param::GetInt(Param::VX1SendFirmwareRevision) == 1) {
-            // Send from all 9 BMS addresses (0x40-0x48) per Li-plus protocol
-            for (uint8_t i = 0; i < 9; i++) {
-                uint8_t sourceAddress = 0x40 + i;
-                SendFirmwareRevisionPgn(bmsCanHardware, sourceAddress);
-            }
+        // Send from all 9 BMS addresses (0x40-0x48) per Li-plus protocol
+        for (uint8_t i = 0; i < 9; i++) {
+            uint8_t sourceAddress = 0x40 + i;
+            SendFirmwareRevisionPgn(bmsCanHardware, sourceAddress);
         }
         lastFEDATime = currentTime;
     }
