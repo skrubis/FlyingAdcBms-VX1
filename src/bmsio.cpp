@@ -319,8 +319,10 @@ void BmsIO::ReadCellVoltages()
    bool lowCurrent = fabs(Param::GetFloat(Param::idcavg)) < idleCurrentThreshold;
    bool opmodeOk = inIdle || (allowRun && lowCurrent);
    bool ubalanceOk = Param::GetFloat(Param::uavg) > Param::GetFloat(Param::ubalance);
-   // If focusing on weak cells, bypass ubalance gate so we can charge them even when average is low
-   bool balance = opmodeOk && (BAL_OFF != balMode) && (ubalanceOk || focusActive);
+   // Strict focus mode:
+   //  - If focus is active, only cells in focusSet are allowed to balance (bypassing ubalance gate).
+   //  - If focus is not active, require ubalanceOk for normal balancing.
+   bool balance = opmodeOk && (BAL_OFF != balMode) && (focusActive ? (focusSet[chan] != 0) : ubalanceOk);
    FlyingAdcBms::BalanceStatus bstt;
    
    // Update which cells need balancing (once per full cycle)
@@ -348,8 +350,8 @@ void BmsIO::ReadCellVoltages()
          float udc = Param::GetFloat((Param::PARAM_NUM)(Param::u0 + chan));
          float balanceTarget = ComputeBalanceTarget(balMode);
          int effBalMode = balMode;
-         // In focus mode on the focused cell, do not discharge it further
-         if (focusActive && chan == focusChan)
+         // In focus mode, do not discharge any cell in the focused set (topN)
+         if (focusActive && focusSet[chan])
          {
             effBalMode &= BAL_ADD; // only allow charging
          }
@@ -424,7 +426,7 @@ void BmsIO::ReadCellVoltages()
    {
       float gain = Param::GetFloat(Param::gain);
       int numChan = Param::GetInt(Param::numchan);
-      bool even = (chan & 1) == 0;
+      bool even = ((chan & 1) == 0);
 
       if (chan == 0)
          gain *= 1 + Param::GetFloat(Param::correction0) / 1000000.0f;
@@ -442,7 +444,10 @@ void BmsIO::ReadCellVoltages()
       max = MAX(max, udc);
       sum += udc;
 
-      if (!focusActive || focusRefreshActive)
+      // Always progress the channel scan so that all cell voltages are updated,
+      // even when focus mode is active. Focus mode should influence balancing,
+      // not whether we read/update channels.
+      if (true)
       {
          //First we sweep across all even channels: 0, 2, 4,...
          if (even && (chan + 2) < numChan)
@@ -466,6 +471,10 @@ void BmsIO::ReadCellVoltages()
             max = 0;
             sum = 0;
 
+            // Ensure unused channels (>= numChan) show 0 on UIs when module has fewer than 16 cells
+            for (int i = numChan; i < 16; i++)
+               Param::SetFloat((Param::PARAM_NUM)(Param::u0 + i), 0);
+
             // If we were doing a periodic refresh during focus, end it and reschedule next
             if (focusRefreshActive)
             {
@@ -479,8 +488,7 @@ void BmsIO::ReadCellVoltages()
       }
       else
       {
-         // Stay on focused channel for the duration of the hold
-         if (focusChan >= 0) chan = focusChan;
+         // Focus hold path disabled: we keep scanning all channels continuously
       }
 
       //This instructs the SwitchMux task to change channel, with dead time
