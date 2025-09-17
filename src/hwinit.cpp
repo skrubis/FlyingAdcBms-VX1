@@ -120,7 +120,7 @@ void nvic_setup(void)
    nvic_set_priority(NVIC_TIM2_IRQ, 0);
 
    nvic_enable_irq(NVIC_TIM4_IRQ); //Scheduler for TIM4
-   nvic_set_priority(NVIC_TIM4_IRQ, 0); // Set priority same as TIM2 or adjust as needed
+   nvic_set_priority(NVIC_TIM4_IRQ, 0xF0); // Lowest priority - VX1 messaging is least critical
 
    //CAN RX IRQ
    nvic_enable_irq(NVIC_USB_LP_CAN_RX0_IRQ);

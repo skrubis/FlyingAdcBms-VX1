@@ -22,6 +22,7 @@
 #include <libopencm3/stm32/can.h>
 #include <libopencm3/stm32/iwdg.h>
 #include <libopencm3/stm32/f1/bkp.h>
+#include <libopencm3/cm3/nvic.h>
 #include "stm32_can.h"
 #include "canmap.h"
 #include "cansdo.h"
@@ -337,9 +338,15 @@ extern "C" int main(void)
    schedulerTIM4 = &sTIM4;
    //Initialize CAN1 with baud rate based on VX1 mode
    VX1::Initialize();
-   Stm32Can c(CAN1, VX1::GetCanBaudRate());
-   CanMap cmi(&c, false);
-   CanMap cme(&c);
+    Stm32Can c(CAN1, VX1::GetCanBaudRate());
+    // Override CAN IRQ priorities set by libopeninv to match our safety policy
+    // Priority numbers: lower value = higher preemption priority
+    // Priority hierarchy: TIM2 (BMS core) = 0x0, CAN RX = 0x6, CAN TX = 0x8, TIM4 (VX1) = 0xF
+    nvic_set_priority(NVIC_USB_LP_CAN_RX0_IRQ, 0x6 << 4); // CAN1 RX0 medium
+    nvic_set_priority(NVIC_CAN_RX1_IRQ,       0x6 << 4); // CAN1 RX1 medium
+    nvic_set_priority(NVIC_USB_HP_CAN_TX_IRQ, 0x8 << 4); // CAN1 TX lower than RX
+    CanMap cmi(&c, false);
+    CanMap cme(&c);
    canMapInternal = &cmi;
    canMapExternal = &cme;
    CanSdo sdo(&c, &cme);
@@ -373,7 +380,6 @@ extern "C" int main(void)
 
    while(1)
    {
-      char c = 0;
       CanSdo::SdoFrame* sdoFrame = sdo.GetPendingUserspaceSdo();
 
       int pr = sdo.GetPrintRequest();
