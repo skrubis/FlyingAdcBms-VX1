@@ -91,6 +91,18 @@ void BmsIO::ReadCellVoltages()
    static uint8_t chan = 0, balanceCycles = 0;
    static float sum = 0, min = 8000, max = 0;
    int balMode = Param::GetInt(Param::balmode);
+   // Focus dwell safety sweep interval (seconds) is configurable via balFocusSweep
+   int safetyIntervalSec = Param::GetInt(Param::balFocusSweep);
+   if (safetyIntervalSec < 1) safetyIntervalSec = 1; // clamp safeguards
+   static int safetyCountdownCycles = -1; // 25ms cycles remaining until next sweep
+   static bool safetySweepActive = false;
+   static int safetyReadCount = 0;
+   static int prevSafetyIntervalSec = -1;
+   if (prevSafetyIntervalSec != safetyIntervalSec || safetyCountdownCycles < 0)
+   {
+      safetyCountdownCycles = (safetyIntervalSec * 1000) / 25;
+      prevSafetyIntervalSec = safetyIntervalSec;
+   }
 
    // Simple focus selection: choose the lowest cell if it is below the trimmed average by >= minDev
    if (Param::GetInt(Param::balFocusEnable) == 1)
@@ -128,10 +140,40 @@ void BmsIO::ReadCellVoltages()
       focusHoldCyclesRemaining = 0;
    }
 
-   bool balance = Param::GetInt(Param::opmode) == BmsFsm::IDLE
-               && Param::GetFloat(Param::uavg) > Param::GetFloat(Param::ubalance)
-               && BAL_OFF != balMode;
+   // Manage periodic safety sweep while in focus mode
+   if (focusActive)
+   {
+      if (!safetySweepActive)
+      {
+         if (safetyCountdownCycles > 0) safetyCountdownCycles--;
+         if (safetyCountdownCycles <= 0)
+         {
+            // Start a safety sweep: disable balancing and sweep all channels once
+            safetySweepActive = true;
+            safetyReadCount = 0;
+            // Reset countdown now for the next interval, it will continue ticking after sweep
+            safetyCountdownCycles = (safetyIntervalSec * 1000) / 25;
+         }
+      }
+   }
+   else
+   {
+      // Not in focus mode: no special sweeping
+      safetySweepActive = false;
+      safetyReadCount = 0;
+      safetyCountdownCycles = (safetyIntervalSec * 1000) / 25;
+   }
+
+   bool inIdle = Param::GetInt(Param::opmode) == BmsFsm::IDLE;
+   bool ubalanceOk = Param::GetFloat(Param::uavg) > Param::GetFloat(Param::ubalance);
+   bool balance = inIdle && (BAL_OFF != balMode) && (ubalanceOk || focusActive);
    FlyingAdcBms::BalanceStatus bstt;
+
+   // During a safety sweep we force balancing off to get fast, clean readings
+   if (safetySweepActive)
+   {
+      balance = false;
+   }
 
    if (balance)
    {
@@ -227,29 +269,61 @@ void BmsIO::ReadCellVoltages()
       max = MAX(max, udc);
       sum += udc;
 
-      //First we sweep across all even channels: 0, 2, 4,...
-      if (even && (chan + 2) < numChan)
-         chan += 2;
-      //After reaching the furthest even channel we change over to a higher odd channel
-      else if (even && (chan + 1) < numChan)
-         chan++;
-      //or lower odd channel
-      else if (even)
-         chan--;
-      //Now we sweep across all odd channels until we reach 1
-      else if (chan > 1)
-         chan -= 2;
-      //We have now reached chan 1. Accumulate values and restart at chan 0
+      if (safetySweepActive)
+      {
+         // Progress normally through a full sweep with balancing disabled
+         if (even && (chan + 2) < numChan)
+            chan += 2;
+         else if (even && (chan + 1) < numChan)
+            chan++;
+         else if (even)
+            chan--;
+         else if (chan > 1)
+            chan -= 2;
+         else
+         {
+            chan = 0;
+            Accumulate(sum, min, max, sum / numChan);
+            min = 8000;
+            max = 0;
+            sum = 0;
+         }
+         // Count reads to know when a full sweep is done
+         safetyReadCount++;
+         if (safetyReadCount >= numChan)
+         {
+            safetySweepActive = false;
+            safetyReadCount = 0;
+         }
+         muxRequest = chan;
+      }
+      else if (focusActive)
+      {
+         // Freeze on focus channel for dwell balancing; keep mux on focus channel
+         chan = (focusChan >= 0 && focusChan < numChan) ? (uint8_t)focusChan : 0;
+         muxRequest = chan;
+      }
       else
       {
-         chan = 0;
-         Accumulate(sum, min, max, sum / numChan);
-         min = 8000;
-         max = 0;
-         sum = 0;
+         // Normal channel progression
+         if (even && (chan + 2) < numChan)
+            chan += 2;
+         else if (even && (chan + 1) < numChan)
+            chan++;
+         else if (even)
+            chan--;
+         else if (chan > 1)
+            chan -= 2;
+         else
+         {
+            chan = 0;
+            Accumulate(sum, min, max, sum / numChan);
+            min = 8000;
+            max = 0;
+            sum = 0;
+         }
+         muxRequest = chan;
       }
-      //This instructs the SwitchMux task to change channel, with dead time
-      muxRequest = chan;
    }
 }
 

@@ -60,6 +60,7 @@
     PARAM_ENTRY(CAT_BMS,     balFocusEnable, OFFON, 0, 1, 0, 175 ) \
     PARAM_ENTRY(CAT_BMS,     balFocusMinDev, "mV",   0,      500,    15,     176 ) \
     PARAM_ENTRY(CAT_BMS,     balFocusHold,   "s",    0,      86400,  600,    178 ) \
+    PARAM_ENTRY(CAT_BMS,     balFocusSweep,  "s",    1,      3600,   5,      181 ) \
     PARAM_ENTRY(CAT_BMS,     idlewait,    "s",       0,      100000, 60,     12  ) \
     PARAM_ENTRY(CAT_BMS,     sleeptimeout,"h",        0,      99,     2,      56  ) \
     PARAM_ENTRY(CAT_BMS,     idlecurrent, "mA",       0,      9999,   800,    57  ) \
