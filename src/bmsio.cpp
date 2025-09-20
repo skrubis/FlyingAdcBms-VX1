@@ -98,13 +98,14 @@ void BmsIO::ReadCellVoltages()
    static bool safetySweepActive = false;
    static int safetyReadCount = 0;
    static int prevSafetyIntervalSec = -1;
+   static bool safetyPrimed = false; // true after we've kicked off ADC for chan 0 at sweep start
    if (prevSafetyIntervalSec != safetyIntervalSec || safetyCountdownCycles < 0)
    {
       safetyCountdownCycles = (safetyIntervalSec * 1000) / 25;
       prevSafetyIntervalSec = safetyIntervalSec;
    }
 
-   // Simple focus selection: choose the lowest cell if it is below the trimmed average by >= minDev
+   // Continuous focus selection using stored u-values (these update at safety sweeps)
    if (Param::GetInt(Param::balFocusEnable) == 1)
    {
       int numChan = Param::GetInt(Param::numchan);
@@ -112,25 +113,28 @@ void BmsIO::ReadCellVoltages()
       GetMinCell(numChan, minIdx, minVal);
       float trimmedAvg = ComputeTrimmedAvgExcludingMin(numChan);
       float deficit = trimmedAvg - minVal;
+
       if (focusHoldCyclesRemaining > 0)
       {
          focusHoldCyclesRemaining--;
       }
-      if (focusHoldCyclesRemaining <= 0)
+
+      if (deficit >= Param::GetFloat(Param::balFocusMinDev))
       {
-         if (deficit >= Param::GetFloat(Param::balFocusMinDev))
+         // Start/refresh focus on the current lowest cell
+         if (!focusActive || focusChan != minIdx)
          {
             focusChan = minIdx;
-            int holdSec = Param::GetInt(Param::balFocusHold);
-            if (holdSec < 0) holdSec = 0;
-            focusHoldCyclesRemaining = (holdSec * 1000) / 25;
             focusActive = true;
          }
-         else
-         {
-            focusActive = false;
-            focusChan = -1;
-         }
+         // Refresh/extend hold
+         focusHoldCyclesRemaining = Param::GetInt(Param::balFocusHold) * (1000 / 25);
+      }
+      else if (focusHoldCyclesRemaining <= 0)
+      {
+         // No longer meets deficit and hold expired -> leave focus
+         focusActive = false;
+         focusChan = -1;
       }
    }
    else
@@ -151,6 +155,15 @@ void BmsIO::ReadCellVoltages()
             // Start a safety sweep: disable balancing and sweep all channels once
             safetySweepActive = true;
             safetyReadCount = 0;
+            // Ensure sweep starts at channel 0 for canonical coverage
+            chan = 0;
+            safetyPrimed = false; // we must prime ADC for channel 0 before using the result
+            // Clear any lingering per-cell command indicators; during sweep all balancing is off
+            int numChanClr = Param::GetInt(Param::numchan);
+            for (int i = 0; i < numChanClr; i++)
+            {
+               Param::SetInt((Param::PARAM_NUM)(Param::u0cmd + i), (int)FlyingAdcBms::BAL_OFF);
+            }
             // Reset countdown now for the next interval, it will continue ticking after sweep
             safetyCountdownCycles = (safetyIntervalSec * 1000) / 25;
          }
@@ -177,6 +190,34 @@ void BmsIO::ReadCellVoltages()
 
    if (balance)
    {
+      // If we are dwelling on focus and not in a safety sweep, continuously charge the focus cell
+      if (focusActive && !safetySweepActive && focusChan >= 0)
+      {
+         chan = (uint8_t)focusChan;
+         muxRequest = chan; // keep hardware on focus channel
+         // Ensure no other cell shows a command during dwell
+         int numChanNow = Param::GetInt(Param::numchan);
+         for (int i = 0; i < numChanNow; i++)
+         {
+            if (i == chan) continue;
+            Param::SetInt((Param::PARAM_NUM)(Param::u0cmd + i), (int)FlyingAdcBms::BAL_OFF);
+         }
+         int effBalMode = balMode & ~BAL_DIS; // never discharge during focus
+         FlyingAdcBms::BalanceStatus bsttLocal;
+         if (effBalMode & BAL_ADD)
+         {
+            bsttLocal = FlyingAdcBms::SetBalancing(FlyingAdcBms::BAL_CHARGE);
+         }
+         else
+         {
+            bsttLocal = FlyingAdcBms::SetBalancing(FlyingAdcBms::BAL_OFF);
+         }
+         Param::SetInt((Param::PARAM_NUM)(Param::u0cmd + chan), bsttLocal);
+         // Skip cycle-based timing here; metrics update on safety sweeps only
+         balanceCycles = 1; // keep read block from running during dwell
+      }
+      else
+      {
       if (balanceCycles == 0)
       {
          balanceCycles = totalBalanceCycles; // this leads to switching to next channel below
@@ -188,6 +229,12 @@ void BmsIO::ReadCellVoltages()
 
       if (balanceCycles > 0 && balanceCycles < (totalBalanceCycles - 1))
       {
+         // During focus dwell ensure we are balancing the focus channel
+         if (focusActive && focusChan >= 0)
+         {
+            chan = (uint8_t)focusChan;
+            muxRequest = chan; // keep hardware on focus channel during balancing window
+         }
          float udc = Param::GetFloat((Param::PARAM_NUM)(Param::u0 + chan));
          float balanceTarget = 0;
          int numChan = Param::GetInt(Param::numchan);
@@ -206,20 +253,16 @@ void BmsIO::ReadCellVoltages()
                break;
          }
 
-         int effBalMode = balMode;
-         if (focusActive)
-         {
-            // Do not discharge any cells while focusing a weak cell
-            effBalMode &= ~BAL_DIS;
-         }
+         // Only disallow discharge while focusing a weak cell; otherwise allow standard behavior
+         int effBalMode = focusActive ? (balMode & ~BAL_DIS) : balMode;
 
-         if (focusActive && chan == focusChan)
+         if (focusActive && chan == focusChan && (effBalMode & BAL_ADD))
          {
-            // Ensure the focus cell is only charged
-            effBalMode &= BAL_ADD;
+            // Focus condition already vetted against balFocusMinDev during selection.
+            // Avoid missing charge due to small measurement noise; charge while focused.
+            bstt = FlyingAdcBms::SetBalancing(FlyingAdcBms::BAL_CHARGE);
          }
-
-         if (udc < (balanceTarget - 3) && (effBalMode & BAL_ADD))
+         else if (udc < (balanceTarget - 3) && (effBalMode & BAL_ADD))
          {
             bstt = FlyingAdcBms::SetBalancing(FlyingAdcBms::BAL_CHARGE);
          }
@@ -237,6 +280,7 @@ void BmsIO::ReadCellVoltages()
       else
       {
          FlyingAdcBms::SetBalancing(FlyingAdcBms::BAL_OFF);
+      }
       }
    }
    else
@@ -263,14 +307,33 @@ void BmsIO::ReadCellVoltages()
       //Read ADC result before mux change
       float udc = FlyingAdcBms::GetResult() * (gain / 1000.0f);
 
-      Param::SetFloat((Param::PARAM_NUM)(Param::u0 + chan), udc);
+      // If we just entered a safety sweep, the first ADC result still belongs to the previous
+      // channel (from focus dwell). Prime by switching mux to chan=0 and skip storing/aggregation
+      // this cycle so the next 25ms result maps to u0 correctly.
+      if (safetySweepActive && safetyReadCount == 0 && !safetyPrimed)
+      {
+         muxRequest = chan; // chan is 0 at sweep start
+         safetyPrimed = true;
+         return;
+      }
 
-      min = MIN(min, udc);
-      max = MAX(max, udc);
-      sum += udc;
+      Param::SetFloat((Param::PARAM_NUM)(Param::u0 + chan), udc);
 
       if (safetySweepActive)
       {
+         // At the very start of a safety sweep, reset aggregator
+         if (safetyReadCount == 0)
+         {
+            sum = 0;
+            min = 8000;
+            max = 0;
+         }
+
+         // Aggregate this channel reading into sum/min/max only during safety sweep
+         min = MIN(min, udc);
+         max = MAX(max, udc);
+         sum += udc;
+
          // Progress normally through a full sweep with balancing disabled
          if (even && (chan + 2) < numChan)
             chan += 2;
@@ -283,17 +346,19 @@ void BmsIO::ReadCellVoltages()
          else
          {
             chan = 0;
-            Accumulate(sum, min, max, sum / numChan);
-            min = 8000;
-            max = 0;
-            sum = 0;
          }
          // Count reads to know when a full sweep is done
          safetyReadCount++;
          if (safetyReadCount >= numChan)
          {
+            // Completed a full safety sweep: now publish aggregated metrics
+            Accumulate(sum, min, max, (numChan > 0 ? (sum / numChan) : 0));
+            min = 8000;
+            max = 0;
+            sum = 0;
             safetySweepActive = false;
             safetyReadCount = 0;
+            // Fresh data now visible via stored u-values; normal selection logic will use them
          }
          muxRequest = chan;
       }
@@ -302,9 +367,15 @@ void BmsIO::ReadCellVoltages()
          // Freeze on focus channel for dwell balancing; keep mux on focus channel
          chan = (focusChan >= 0 && focusChan < numChan) ? (uint8_t)focusChan : 0;
          muxRequest = chan;
+         // Do NOT modify sum/min/max while frozen; aggregation happens in safety sweeps
       }
       else
       {
+         // Normal scanning (focus inactive): aggregate and Accumulate at wrap
+         min = MIN(min, udc);
+         max = MAX(max, udc);
+         sum += udc;
+
          // Normal channel progression
          if (even && (chan + 2) < numChan)
             chan += 2;
