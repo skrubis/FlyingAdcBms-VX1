@@ -60,9 +60,17 @@ void BmsIO::SwitchMux()
 {
    static int channel = -1;
    static bool startAdc = false;
+   // Ignore new mux requests while an ADC conversion is in flight to prevent
+   // turning the mux off mid-conversion on older hardware
+   static int conversionHoldoffTicks = 0; // 2ms ticks; ~12 => ~24ms
+
+   if (conversionHoldoffTicks > 0)
+   {
+      conversionHoldoffTicks--;
+   }
 
    //t=0 ms: On a mux change request first completely turn off mux
-   if (muxRequest >= 0)
+   if (muxRequest >= 0 && conversionHoldoffTicks == 0)
    {
       FlyingAdcBms::MuxOff();
       channel = muxRequest;
@@ -80,6 +88,8 @@ void BmsIO::SwitchMux()
    {
       FlyingAdcBms::StartAdc();
       startAdc = false;
+      // Hold off new mux changes until conversion is safely complete
+      conversionHoldoffTicks = 12; // 12 * 2ms = 24ms
    }
    //t=21 ms: ADC conversion is finished
    //t=25 ms: ADC conversion result is read
@@ -99,6 +109,9 @@ void BmsIO::ReadCellVoltages()
    static int safetyReadCount = 0;
    static int prevSafetyIntervalSec = -1;
    static bool safetyPrimed = false; // true after we've kicked off ADC for chan 0 at sweep start
+   static int safetyPrimeWaitCycles = 0; // number of 25ms cycles to skip before first sweep sample
+   // Gate repeated mux requests during focus dwell so we don't spam the mux
+   static int lastRequestedMux = -1;
    if (prevSafetyIntervalSec != safetyIntervalSec || safetyCountdownCycles < 0)
    {
       safetyCountdownCycles = (safetyIntervalSec * 1000) / 25;
@@ -142,6 +155,7 @@ void BmsIO::ReadCellVoltages()
       focusActive = false;
       focusChan = -1;
       focusHoldCyclesRemaining = 0;
+      lastRequestedMux = -1; // allow fresh mux requests after leaving focus
    }
 
    // Manage periodic safety sweep while in focus mode
@@ -158,6 +172,10 @@ void BmsIO::ReadCellVoltages()
             // Ensure sweep starts at channel 0 for canonical coverage
             chan = 0;
             safetyPrimed = false; // we must prime ADC for channel 0 before using the result
+            lastRequestedMux = -1; // reset to allow prime mux request
+            // On old HW (<=2.2) give the mux extra time to settle: skip one extra 25ms cycle
+            int hwrev = Param::GetInt(Param::hwrev);
+            safetyPrimeWaitCycles = (hwrev <= 4 /* HW_22 or older */) ? 2 : 1;
             // Clear any lingering per-cell command indicators; during sweep all balancing is off
             int numChanClr = Param::GetInt(Param::numchan);
             for (int i = 0; i < numChanClr; i++)
@@ -194,7 +212,7 @@ void BmsIO::ReadCellVoltages()
       if (focusActive && !safetySweepActive && focusChan >= 0)
       {
          chan = (uint8_t)focusChan;
-         muxRequest = chan; // keep hardware on focus channel
+         if (lastRequestedMux != (int)chan) { muxRequest = chan; lastRequestedMux = chan; } // keep hardware on focus channel
          // Ensure no other cell shows a command during dwell
          int numChanNow = Param::GetInt(Param::numchan);
          for (int i = 0; i < numChanNow; i++)
@@ -233,7 +251,7 @@ void BmsIO::ReadCellVoltages()
          if (focusActive && focusChan >= 0)
          {
             chan = (uint8_t)focusChan;
-            muxRequest = chan; // keep hardware on focus channel during balancing window
+            if (lastRequestedMux != (int)chan) { muxRequest = chan; lastRequestedMux = chan; } // keep hardware on focus channel during balancing window
          }
          float udc = Param::GetFloat((Param::PARAM_NUM)(Param::u0 + chan));
          float balanceTarget = 0;
@@ -310,10 +328,16 @@ void BmsIO::ReadCellVoltages()
       // If we just entered a safety sweep, the first ADC result still belongs to the previous
       // channel (from focus dwell). Prime by switching mux to chan=0 and skip storing/aggregation
       // this cycle so the next 25ms result maps to u0 correctly.
-      if (safetySweepActive && safetyReadCount == 0 && !safetyPrimed)
+      if (safetySweepActive && safetyReadCount == 0 && safetyPrimeWaitCycles > 0)
       {
-         muxRequest = chan; // chan is 0 at sweep start
-         safetyPrimed = true;
+         // First prime cycle: request channel 0 once, then wait required cycles
+         if (!safetyPrimed)
+         {
+            muxRequest = chan; // chan is 0 at sweep start
+            safetyPrimed = true;
+            lastRequestedMux = chan;
+         }
+         safetyPrimeWaitCycles--;
          return;
       }
 
@@ -366,7 +390,7 @@ void BmsIO::ReadCellVoltages()
       {
          // Freeze on focus channel for dwell balancing; keep mux on focus channel
          chan = (focusChan >= 0 && focusChan < numChan) ? (uint8_t)focusChan : 0;
-         muxRequest = chan;
+         if (lastRequestedMux != (int)chan) { muxRequest = chan; lastRequestedMux = chan; }
          // Do NOT modify sum/min/max while frozen; aggregation happens in safety sweeps
       }
       else
