@@ -63,8 +63,10 @@ void BmsIO::SwitchMux()
    static int adcStartChannel = -1;
    static bool startAdc = false;
    // Ignore new mux requests while an ADC conversion is in flight to prevent
-   // turning the mux off mid-conversion on older hardware
-   static int conversionHoldoffTicks = 0; // 2ms ticks; ~12 => ~24ms
+   // turning the mux off mid-conversion. Keep this below the 25ms read period
+   // minus the mux-off/select/start sequence, or the next ADC result can be
+   // stale and signed with the new channel polarity.
+   static int conversionHoldoffTicks = 0; // 2ms ticks; 9 => ~18ms
 
    if (conversionHoldoffTicks > 0)
    {
@@ -96,8 +98,9 @@ void BmsIO::SwitchMux()
          muxRequest = -1;
       adcStartChannel = -1;
       startAdc = false;
-      // Hold off new mux changes until conversion is safely complete
-      conversionHoldoffTicks = 12; // 12 * 2ms = 24ms
+      // Hold off accidental mux changes during the ADC conversion, but still
+      // allow the next requested channel to start immediately after the 25ms read.
+      conversionHoldoffTicks = 9; // 9 * 2ms = 18ms
    }
    //t=21 ms: ADC conversion is finished
    //t=25 ms: ADC conversion result is read
