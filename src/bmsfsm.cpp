@@ -28,6 +28,16 @@
 #define SDO_INDEX_PARAMS      0x2000
 #define BOOT_DELAY_CYCLES     5
 
+static void KeepEnableOutputsAsserted()
+{
+#ifdef IGNORE_ENA_SLEEP
+   // selfena_out drives ENA_MCU, the firmware self-latch path for DCDC_ENA.
+   // nextena_out drives ENA_OUT for the next daisy-chained board.
+   DigIo::selfena_out.Set();
+   DigIo::nextena_out.Set();
+#endif
+}
+
 BmsFsm::BmsFsm(CanMap* cm, CanSdo* cs)
    : canMap(cm), canSdo(cs), isMain(false), infoIndex(1), numModules(1), cycles(0)
 {
@@ -106,6 +116,7 @@ BmsFsm::bmsstate BmsFsm::Run(bmsstate currentState)
       }
       break;
    case SET_ADDR:
+      KeepEnableOutputsAsserted();
       cycles++;
 
       if (cycles == BOOT_DELAY_CYCLES)
@@ -119,6 +130,7 @@ BmsFsm::bmsstate BmsFsm::Run(bmsstate currentState)
       }
       break;
    case REQ_INFO:
+      KeepEnableOutputsAsserted();
       cycles++;
 
       if (cycles == 10)
@@ -129,6 +141,7 @@ BmsFsm::bmsstate BmsFsm::Run(bmsstate currentState)
       }
       break;
    case RECV_INFO:
+      KeepEnableOutputsAsserted();
       if (canSdo->SDOReadReply(sdoReply))
       {
          numChan[infoIndex] = FP_TOINT(sdoReply); //numbers are transmitted in 5 bit fixed point
@@ -142,9 +155,11 @@ BmsFsm::bmsstate BmsFsm::Run(bmsstate currentState)
       return INIT;
       break;
    case INIT:
+      KeepEnableOutputsAsserted();
       FlyingAdcBms::Init();
       return SELFTEST;
    case SELFTEST:
+      KeepEnableOutputsAsserted();
       if (SelfTest::GetLastResult() == SelfTest::TestsDone)
          return RUN;
       if (SelfTest::GetLastResult() == SelfTest::TestFailed)
@@ -155,6 +170,7 @@ BmsFsm::bmsstate BmsFsm::Run(bmsstate currentState)
       break;
    case RUN:
    {
+      KeepEnableOutputsAsserted();
       // Convert milliamps to amps for comparison
       float idleCurrentThreshold = Param::GetInt(Param::idlecurrent) / 1000.0f;
       
@@ -176,6 +192,7 @@ BmsFsm::bmsstate BmsFsm::Run(bmsstate currentState)
    }
    case IDLE:
    {
+      KeepEnableOutputsAsserted();
       cycles++;
 
       // Check if current is above the idle threshold to return to RUN state
@@ -191,9 +208,9 @@ BmsFsm::bmsstate BmsFsm::Run(bmsstate currentState)
       // 3600 cycles = 1 hour, multiply by sleeptimeout parameter (in hours)
       uint32_t sleepTimeoutCycles = (uint32_t)(Param::GetFloat(Param::sleeptimeout) * 3600 * 10);
       
-      // Turn off after sleep timeout if not enabled.
-      // IGNORE_ENA_SLEEP keeps daisy-chained nodes alive on systems where ENA_IN
-      // is only valid during boot and the main 12V rail is the real shutdown.
+      // Turn off after sleep timeout if not enabled. IGNORE_ENA_SLEEP changes
+      // this board to latch self/next enable after boot and rely on main 12V
+      // removal as the real shutdown signal.
 #ifndef IGNORE_ENA_SLEEP
       if (cycles > sleepTimeoutCycles && !IsEnabled())
       {
