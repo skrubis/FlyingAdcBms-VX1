@@ -20,6 +20,10 @@
 OUT_DIR      = obj
 PREFIX		?= arm-none-eabi
 HW          ?= HWV2
+# Default VX1 behavior: ENA_IN is used for boot/addressing, but the main 12V rail
+# is the real shutdown signal. Set IGNORE_ENA_SLEEP=0 to restore upstream-style
+# idle sleep shutdown when ENA_IN is removed.
+IGNORE_ENA_SLEEP ?= 1
 BINARY		= stm32_bms
 SIZE        = $(PREFIX)-size
 CC		      = $(PREFIX)-gcc
@@ -41,6 +45,9 @@ CPPFLAGS    = -Og -ggdb -Wall -Wextra -Iinclude/ -Ilibopeninv/include -Ilibopenc
 EXTRACOMPILERFLAGS  = $(shell \
 	 if [ -z "$$GITHUB_RUN_NUMBER" ]; then echo "-DGITHUB_RUN_NUMBER=0"; else echo "-DGITHUB_RUN_NUMBER=$$GITHUB_RUN_NUMBER"; fi \
 	 )
+ifeq ($(IGNORE_ENA_SLEEP),1)
+EXTRACOMPILERFLAGS += -DIGNORE_ENA_SLEEP
+endif
 
 LDSCRIPT	  = linker.ld
 LDFLAGS    = -Llibopencm3/lib -T$(LDSCRIPT) -march=armv7 -nostartfiles -Wl,--gc-sections,-Map,linker.map

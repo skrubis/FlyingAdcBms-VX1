@@ -191,12 +191,18 @@ BmsFsm::bmsstate BmsFsm::Run(bmsstate currentState)
       // 3600 cycles = 1 hour, multiply by sleeptimeout parameter (in hours)
       uint32_t sleepTimeoutCycles = (uint32_t)(Param::GetFloat(Param::sleeptimeout) * 3600 * 10);
       
-      // Turn off after sleep timeout if not enabled
+      // Turn off after sleep timeout if not enabled.
+      // IGNORE_ENA_SLEEP keeps daisy-chained nodes alive on systems where ENA_IN
+      // is only valid during boot and the main 12V rail is the real shutdown.
+#ifndef IGNORE_ENA_SLEEP
       if (cycles > sleepTimeoutCycles && !IsEnabled())
       {
          DigIo::selfena_out.Clear();
          DigIo::nextena_out.Clear();
       }
+#else
+      (void)sleepTimeoutCycles;
+#endif
       break;
    }
    case ERROR:
