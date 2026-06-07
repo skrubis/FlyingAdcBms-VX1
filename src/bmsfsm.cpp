@@ -28,11 +28,21 @@
 #define SDO_INDEX_PARAMS      0x2000
 #define BOOT_DELAY_CYCLES     5
 
+// VX1 default: ENA_IN is only used for boot/addressing. After the node is
+// running, keep the firmware latch alive and let main 12V removal kill power.
+// Define ENABLE_ENA_SLEEP to restore the upstream idle sleep shutdown behavior.
+#ifndef ENABLE_ENA_SLEEP
+#ifndef IGNORE_ENA_SLEEP
+#define IGNORE_ENA_SLEEP
+#endif
+#endif
+
 static void KeepEnableOutputsAsserted()
 {
 #ifdef IGNORE_ENA_SLEEP
-   // selfena_out drives ENA_MCU, the firmware self-latch path for DCDC_ENA.
-   // nextena_out drives ENA_OUT for the next daisy-chained board.
+   // PA4 remains the ADC ENA_IN monitor. Do not drive it.
+   // PA8/selfena_out drives the DCDC_ENA self-latch through the diode OR.
+   // PA9/nextena_out drives ENA_OUT for the next daisy-chained board.
    DigIo::selfena_out.Set();
    DigIo::nextena_out.Set();
 #endif
@@ -223,6 +233,7 @@ BmsFsm::bmsstate BmsFsm::Run(bmsstate currentState)
       break;
    }
    case ERROR:
+      KeepEnableOutputsAsserted();
       if (Param::GetBool(Param::enable))
          return RUN;
       break;
