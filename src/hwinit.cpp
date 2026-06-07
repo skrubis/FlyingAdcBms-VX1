@@ -86,11 +86,23 @@ void write_bootloader_pininit()
 
    memset32((int*)&commands, 0, PINDEF_NUMWORDS);
 
-   //Turn off mux at startup
+   // Turn off mux at startup.
    commands.pindef[0].port = GPIOB;
    commands.pindef[0].pin = 255;
    commands.pindef[0].inout = PIN_OUT;
    commands.pindef[0].level = 0;
+
+   // Keep the VX1 enable chain alive while the CAN bootloader is waiting.
+   // PA8 drives the local DCDC_ENA self-latch, PA9 drives ENA_OUT.
+   commands.pindef[1].port = GPIOA;
+   commands.pindef[1].pin = GPIO8;
+   commands.pindef[1].inout = PIN_OUT;
+   commands.pindef[1].level = 1;
+
+   commands.pindef[2].port = GPIOA;
+   commands.pindef[2].pin = GPIO9;
+   commands.pindef[2].inout = PIN_OUT;
+   commands.pindef[2].level = 1;
 
    crc_reset();
    uint32_t crc = crc_calculate_block(((uint32_t*)&commands), PINDEF_NUMWORDS);
