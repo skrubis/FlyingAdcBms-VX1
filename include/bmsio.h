@@ -30,6 +30,7 @@ class BmsIO
    public:
       static void ReadTemperatures();
       static void SwitchMux();
+      static void MuxOff();
       static void ReadCellVoltages();
       static void TestReadCellVoltage(int chan, FlyingAdcBms::BalanceCommand cmd);
       static void MeasureCurrent();
@@ -40,6 +41,7 @@ class BmsIO
       
       static BmsFsm* bmsFsm;
       static int muxRequest;
+      static int muxSettledChannel;
       
       // Minimal focus mode state
       static int focusChan;                // focused cell index, -1 if none

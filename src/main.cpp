@@ -214,7 +214,7 @@ static void ReadCellVoltages(void)
       // Don't turn off the mux here as it breaks the reading sequence on the master node
    }
    else
-      FlyingAdcBms::MuxOff();
+      BmsIO::MuxOff();
 }
 
 static void ForceSOCFromVoltage()

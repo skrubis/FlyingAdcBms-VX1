@@ -25,6 +25,7 @@
 
 BmsFsm* BmsIO::bmsFsm;
 int BmsIO::muxRequest = -1;
+int BmsIO::muxSettledChannel = -1;
 int BmsIO::focusChan = -1;
 int BmsIO::focusHoldCyclesRemaining = 0;
 bool BmsIO::focusActive = false;
@@ -59,6 +60,7 @@ static float ComputeTrimmedAvgExcludingMin(int numChan)
 void BmsIO::SwitchMux()
 {
    static int channel = -1;
+   static int adcStartChannel = -1;
    static bool startAdc = false;
    // Ignore new mux requests while an ADC conversion is in flight to prevent
    // turning the mux off mid-conversion on older hardware
@@ -73,13 +75,15 @@ void BmsIO::SwitchMux()
    if (muxRequest >= 0 && conversionHoldoffTicks == 0)
    {
       FlyingAdcBms::MuxOff();
+      muxSettledChannel = -1;
       channel = muxRequest;
       muxRequest = -1;
    }
    //t=2 ms: switch to requested channel
    else if (channel >= 0)
    {
-      FlyingAdcBms::SelectChannel(channel);
+      adcStartChannel = channel;
+      FlyingAdcBms::SelectChannel((uint8_t)adcStartChannel);
       channel = -1;
       startAdc = true;
    }
@@ -87,12 +91,23 @@ void BmsIO::SwitchMux()
    else if (startAdc)
    {
       FlyingAdcBms::StartAdc();
+      muxSettledChannel = adcStartChannel;
+      if (muxRequest == adcStartChannel)
+         muxRequest = -1;
+      adcStartChannel = -1;
       startAdc = false;
       // Hold off new mux changes until conversion is safely complete
       conversionHoldoffTicks = 12; // 12 * 2ms = 24ms
    }
    //t=21 ms: ADC conversion is finished
    //t=25 ms: ADC conversion result is read
+}
+
+void BmsIO::MuxOff()
+{
+   muxRequest = -1;
+   muxSettledChannel = -1;
+   FlyingAdcBms::MuxOff();
 }
 
 void BmsIO::ReadCellVoltages()
@@ -212,7 +227,6 @@ void BmsIO::ReadCellVoltages()
       if (focusActive && !safetySweepActive && focusChan >= 0)
       {
          chan = (uint8_t)focusChan;
-         if (lastRequestedMux != (int)chan) { muxRequest = chan; lastRequestedMux = chan; } // keep hardware on focus channel
          // Ensure no other cell shows a command during dwell
          int numChanNow = Param::GetInt(Param::numchan);
          for (int i = 0; i < numChanNow; i++)
@@ -220,6 +234,17 @@ void BmsIO::ReadCellVoltages()
             if (i == chan) continue;
             Param::SetInt((Param::PARAM_NUM)(Param::u0cmd + i), (int)FlyingAdcBms::BAL_OFF);
          }
+
+         if (muxSettledChannel != (int)chan)
+         {
+            muxRequest = chan;
+            lastRequestedMux = chan;
+            FlyingAdcBms::BalanceStatus offStt = FlyingAdcBms::SetBalancing(FlyingAdcBms::BAL_OFF);
+            Param::SetInt((Param::PARAM_NUM)(Param::u0cmd + chan), offStt);
+            balanceCycles = 1; // keep read block from running while focus mux is settling
+            return;
+         }
+
          int effBalMode = balMode & ~BAL_DIS; // never discharge during focus
          FlyingAdcBms::BalanceStatus bsttLocal;
          if (effBalMode & BAL_ADD)
@@ -518,6 +543,7 @@ void BmsIO::TestReadCellVoltage(int chan, FlyingAdcBms::BalanceCommand cmd)
    FlyingAdcBms::SelectChannel(chan);
    FlyingAdcBms::SetBalancing(cmd);
    FlyingAdcBms::StartAdc();
+   muxSettledChannel = chan;
    Param::SetFloat((Param::PARAM_NUM)(Param::u0 + chan), udc);
 }
 
