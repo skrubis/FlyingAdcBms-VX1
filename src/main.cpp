@@ -374,9 +374,21 @@ extern "C" int main(void)
 
    LoadNVRAM();
    ForceSOCFromVoltage();
-   
+
    // Boot welcome screen will be displayed from Ms100Task
    // VX1::DisplayBootWelcomeScreen(&c, &s);
+
+   // Start the independent watchdog now that all blocking init (including the
+   // bootloader pin-init flash write) is done and Ms100Task is already kicking
+   // it via iwdg_reset(). A brownout can leave the MCU hung below reliable Vdd
+   // but above the ~2V power-down reset threshold; without a running IWDG such a
+   // node never reboots and silently drops the rest of the chain. The period is
+   // deliberately generous: the only kick is the 100ms task, and the parameter
+   // flash save runs with interrupts disabled for ~100-200ms, so a tight timeout
+   // could fire mid-write and corrupt the param store. ~2s (less in practice on
+   // the F1's faster LSI) still catches a true hang well within reboot time.
+   iwdg_set_period_ms(2000);
+   iwdg_start();
 
    while(1)
    {
