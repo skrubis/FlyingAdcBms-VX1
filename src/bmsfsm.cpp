@@ -27,6 +27,10 @@
 #define IS_ENABLED_THRESH     500
 #define SDO_INDEX_PARAMS      0x2000
 #define BOOT_DELAY_CYCLES     5
+// How often an established node re-broadcasts its downstream address
+// assignment (0x7dd) so a reset/browned-out neighbour can rejoin the chain.
+// Run() is called every 100 ms, so 10 cycles == 1 s.
+#define READDR_PERIOD_CYCLES  10
 
 // VX1 default: ENA_IN is only used for boot/addressing. After the node is
 // running, keep the firmware latch alive and let main 12V removal kill power.
@@ -49,7 +53,7 @@ static void KeepEnableOutputsAsserted()
 }
 
 BmsFsm::BmsFsm(CanMap* cm, CanSdo* cs)
-   : canMap(cm), canSdo(cs), isMain(false), infoIndex(1), numModules(1), cycles(0)
+   : canMap(cm), canSdo(cs), isMain(false), infoIndex(1), numModules(1), cycles(0), readdrCycles(0)
 {
    cm->GetHardware()->AddCallback(this);
    HandleClear();
@@ -91,6 +95,29 @@ BmsFsm::bmsstate BmsFsm::Run(bmsstate currentState)
 {
    uint32_t data[2] = { 0 };
    uint32_t sdoReply;
+
+   // Periodically re-broadcast the address assignment for the next node in the
+   // chain. If a downstream board reset or browned out, it sits in GET_ADDR with
+   // its ENA_OUT (PA9) deasserted, leaving the board after it unpowered. The
+   // master only sends 0x7dd once at boot, so without this a single transient
+   // permanently de-addresses that node and kills everything below it.
+   //
+   // Only emit once we are addressed and running. Healthy downstream nodes are
+   // in RUN/IDLE/ERROR and ignore 0x7dd (it's only acted on in GET_ADDR), so
+   // re-broadcasting cannot disturb them. ourNodeId/ourIndex/pdobase are the
+   // stable captured values (not the recv* fields, which HandleRx overwrites).
+   if (currentState == RUN || currentState == IDLE || currentState == ERROR)
+   {
+      if (++readdrCycles >= READDR_PERIOD_CYCLES)
+      {
+         readdrCycles = 0;
+         uint32_t readdr[2] = { 0 };
+         readdr[1]  = (ourNodeId + 1) & 0xFF;
+         readdr[1] |= ((uint32_t)(ourIndex + 1) & 0xFF) << 8;
+         readdr[1] |= (uint32_t)pdobase << 16;
+         canMap->GetHardware()->Send(0x7dd, readdr);
+      }
+   }
 
    switch (currentState)
    {

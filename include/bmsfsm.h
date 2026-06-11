@@ -57,6 +57,7 @@ class BmsFsm: public CanCallback
       uint8_t infoIndex;
       uint8_t numModules;
       uint32_t cycles;
+      uint32_t readdrCycles;
       uint8_t numChan[MAX_SUB_MODULES + 1]; //sub modules plus one master module
 };
 
